@@ -1,3 +1,6 @@
+export * from './telegram';
+export * from './crm';
+
 export type CustomerStatus = 'Yangi' | 'Faol' | 'Qiziqmoqda' | 'Buyurtma berdi' | 'Sotib oldi' | 'Yo\'qotilgan';
 export type CustomerTag = 'Issiq lead' | 'Qayta aloqa' | 'VIP' | 'Yangi mijoz';
 
@@ -118,19 +121,23 @@ export interface Customer {
   businessId: string;
   telegramUserId?: string;
   telegramUsername?: string;
+  telegramChatId?: string;
+  username?: string;
   firstName: string;
   lastName?: string;
   phone?: string;
-  tags: CustomerTag[];
+  tags?: CustomerTag[];
   source: string;
   totalOrders: number;
   totalSpent: number;
-  lastInteraction: number;
-  leadScore: number;
+  lastInteraction?: number;
+  lastMessageAt?: number;
+  leadScore?: number;
   status: CustomerStatus;
   notes?: string;
   aiSummary?: string;
   createdAt: number;
+  updatedAt?: number;
 }
 
 export interface OrderItem {
@@ -146,19 +153,25 @@ export interface Order {
   id: string;
   businessId: string;
   customerId: string;
+  conversationId?: string | null;
   customerName?: string;
   customerPhone?: string;
+  source?: string;
+  status?: string;
   items: OrderItem[];
   subtotal: number;
-  deliveryFee: number;
-  discount: number;
+  deliveryFee?: number;
+  deliveryPrice?: number;
+  discount?: number;
   total: number;
-  paymentStatus: PaymentStatus;
-  orderStatus: OrderStatus;
-  deliveryAddress: string;
+  currency?: string;
+  customerNote?: string | null;
+  paymentStatus?: PaymentStatus;
+  orderStatus?: OrderStatus;
+  deliveryAddress?: string;
   notes?: string;
   createdAt: number;
-  updatedAt: number;
+  updatedAt?: number;
 }
 
 export interface TelegramMessage {

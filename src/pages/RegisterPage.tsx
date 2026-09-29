@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Bot, Mail, Lock, Store, User, ArrowRight, AlertCircle, Loader2 } from 'lucide-react';
 import { AuthService } from '../services/firebaseService';
+import { firebaseConfig } from '../lib/firebase';
 
 interface RegisterPageProps {
   onSuccess: () => void;
@@ -19,10 +20,14 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
   const [ownerName, setOwnerName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
+  const [failedStep, setFailedStep] = useState<'auth' | 'firestore' | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setErrorCode(null);
+    setFailedStep(null);
 
     if (!businessName.trim()) {
       setError('Iltimos, do\'kon yoki biznesingiz nomini kiriting.');
@@ -36,16 +41,28 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
       await AuthService.registerUser(email, password, businessName.trim(), ownerName.trim());
       onSuccess();
     } catch (err: any) {
-      console.error('Registration error:', err);
+      const code = err.code || 'unknown-error';
+      const step = err.step || (code.startsWith('firestore') ? 'firestore' : 'auth');
+      console.warn(`[Registration Error in Simulator] Step: ${step}, Code: ${code}, Message: ${err.message}`);
+      
+      setErrorCode(code);
+      setFailedStep(step);
+
       let msg = err.message || 'Xatolik yuz berdi. Iltimos qaytadan urinib ko\'ring.';
-      if (err.code === 'auth/operation-not-allowed' || (err.message && err.message.includes('auth/operation-not-allowed'))) {
-        msg = 'Firebase Authentication xizmatida "Email/Password" usuli hali yoqilmagan. Iltimos, Firebase Console (https://console.firebase.google.com) -> Authentication -> Sign-in method bo\'limiga o\'tib, "Email/Password" provayderini "Enable" qilib saqlang.';
-      } else if (err.code === 'auth/email-already-in-use') {
+      if (code === 'auth/operation-not-allowed') {
+        msg = `Firebase Authentication xizmatida "Email/Password" usuli o'chirilgan (PASSWORD_LOGIN_DISABLED). Loyiha ID: ${firebaseConfig.projectId}. Iltimos, Firebase Console (https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/providers) sahifasida "Email/Password" provayderini "Enable" qilib saqlang.`;
+      } else if (code === 'auth/email-already-in-use') {
         msg = 'Bu email manzili allaqachon ro\'yxatdan o\'tgan. Iltimos, tizimga kiring.';
-      } else if (err.code === 'auth/weak-password') {
+      } else if (code === 'auth/weak-password') {
         msg = 'Parol kamida 6 ta belgidan iborat bo\'lishi kerak.';
-      } else if (err.code === 'auth/invalid-email') {
+      } else if (code === 'auth/invalid-email') {
         msg = 'Noto\'g\'ri email formati kiritildi.';
+      } else if (code === 'auth/network-request-failed') {
+        msg = 'Tarmoq ulanishida xatolik yuz berdi. Iltimos internetingizni tekshiring.';
+      } else if (code === 'auth/invalid-api-key') {
+        msg = 'Firebase API kaliti yaroqsiz.';
+      } else if (step === 'firestore') {
+        msg = `Firebase Auth hisobi muvaffaqiyatli yaratildi, lekin Firestore profilini yozishda xatolik yuz berdi (${code}).`;
       }
       setError(msg);
     } finally {
@@ -76,9 +93,16 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
         </div>
 
         {error && (
-          <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{error}</span>
+          <div className="mb-5 p-4 bg-rose-50 border border-rose-200 rounded-2xl text-rose-900 text-xs flex flex-col gap-2">
+            <div className="flex items-center gap-2 font-bold text-rose-700">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>Firebase Xatolik Kodi: <code className="bg-rose-100 px-1.5 py-0.5 rounded font-mono text-rose-800">{errorCode || 'unknown'}</code></span>
+            </div>
+            <div className="text-[11px] text-slate-700 bg-white/70 p-2.5 rounded-xl border border-rose-100 space-y-1">
+              <p><strong>Operatsiya:</strong> {failedStep === 'firestore' ? 'B) Firestore (users/businesses profil yozish)' : 'A) Firebase Authentication (createUserWithEmailAndPassword)'}</p>
+              <p><strong>Loyiha ID:</strong> <code className="font-mono font-semibold">{firebaseConfig.projectId}</code></p>
+              <p><strong>Tafsilot:</strong> {error}</p>
+            </div>
           </div>
         )}
 

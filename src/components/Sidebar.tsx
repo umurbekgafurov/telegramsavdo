@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   LayoutDashboard,
+  MessageSquare,
   Users,
   ShoppingBag,
   Warehouse,
@@ -17,6 +18,7 @@ import {
 
 export type NavTab =
   | 'dashboard'
+  | 'conversations'
   | 'customers'
   | 'orders'
   | 'warehouse'
@@ -49,6 +51,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const navItems: { id: NavTab; label: string; icon: React.ReactNode; badge?: number }[] = [
     { id: 'dashboard', label: 'Bosh sahifa', icon: <LayoutDashboard className="w-5 h-5" /> },
+    { id: 'conversations', label: 'Suhbatlar', icon: <MessageSquare className="w-5 h-5 text-indigo-600" /> },
     { id: 'customers', label: 'Mijozlar', icon: <Users className="w-5 h-5" /> },
     { id: 'orders', label: 'Buyurtmalar', icon: <ShoppingBag className="w-5 h-5" /> },
     { id: 'warehouse', label: 'Ombor', icon: <Warehouse className="w-5 h-5" /> },

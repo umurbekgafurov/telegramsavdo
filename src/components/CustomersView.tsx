@@ -139,7 +139,7 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredCustomers.map((cust) => {
-                  const isHot = cust.leadScore >= 80;
+                  const isHot = (cust.leadScore || 0) >= 80;
                   return (
                     <tr
                       key={cust.id}
@@ -189,7 +189,7 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
                       </td>
                       <td className="py-3.5">
                         <div className="flex flex-wrap gap-1">
-                          {cust.tags.map((t) => (
+                          {(cust.tags || []).map((t) => (
                             <span
                               key={t}
                               className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
@@ -254,7 +254,7 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
                 <div className="text-[10px] text-amber-700 uppercase font-semibold">AI Lead Ball</div>
                 <div className="text-lg font-bold text-amber-900 flex items-center justify-center gap-1 mt-0.5">
                   <Flame className="w-4 h-4 fill-amber-500 text-amber-500" />
-                  {selectedCustomer.leadScore}/100
+                  {selectedCustomer.leadScore || 50}/100
                 </div>
                 <span className="text-[10px] font-semibold text-amber-700">Issiq lead</span>
               </div>

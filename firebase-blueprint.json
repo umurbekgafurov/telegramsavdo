@@ -115,6 +115,52 @@
       },
       "required": ["id", "businessId", "firstName"]
     },
+    "Conversation": {
+      "title": "Conversation",
+      "description": "Conversation between business and customer.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "channel": { "type": "string" },
+        "telegramChatId": { "type": "string" },
+        "status": { "type": "string" },
+        "lastMessagePreview": { "type": "string" },
+        "lastMessageAt": { "type": "number" },
+        "unreadCount": { "type": "number" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["id", "businessId", "customerId", "telegramChatId", "status", "createdAt"]
+    },
+    "ConversationMessage": {
+      "title": "ConversationMessage",
+      "description": "Individual message inside a conversation.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "conversationId": { "type": "string" },
+        "direction": { "type": "string" },
+        "type": { "type": "string" },
+        "text": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "businessId", "customerId", "conversationId", "direction", "type", "text", "createdAt"]
+    },
+    "TelegramUpdateRecord": {
+      "title": "TelegramUpdateRecord",
+      "description": "Idempotency record for Telegram update.",
+      "type": "object",
+      "properties": {
+        "updateId": { "type": "number" },
+        "businessId": { "type": "string" },
+        "processedAt": { "type": "number" }
+      },
+      "required": ["updateId", "businessId", "processedAt"]
+    },
     "Order": {
       "title": "Order",
       "description": "Customer order in CRM.",
@@ -125,6 +171,7 @@
         "customerId": { "type": "string" },
         "customerName": { "type": "string" },
         "total": { "type": "number" },
+        "status": { "type": "string" },
         "orderStatus": { "type": "string" },
         "paymentStatus": { "type": "string" },
         "createdAt": { "type": "number" }
@@ -153,13 +200,25 @@
       "schema": { "$ref": "#/entities/StockMovement" },
       "description": "Stock audit movements for business."
     },
-    "/businesses/{businessId}/customers/{customerId}": {
+    "/customers/{customerId}": {
       "schema": { "$ref": "#/entities/Customer" },
-      "description": "Customers belonging to business."
+      "description": "Tenant-isolated customers collection."
     },
-    "/businesses/{businessId}/orders/{orderId}": {
+    "/conversations/{conversationId}": {
+      "schema": { "$ref": "#/entities/Conversation" },
+      "description": "Tenant-isolated conversations collection."
+    },
+    "/conversations/{conversationId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ConversationMessage" },
+      "description": "Messages subcollection inside conversations."
+    },
+    "/orders/{orderId}": {
       "schema": { "$ref": "#/entities/Order" },
-      "description": "Orders belonging to business."
+      "description": "Tenant-isolated orders collection."
+    },
+    "/telegram_updates/{updateId}": {
+      "schema": { "$ref": "#/entities/TelegramUpdateRecord" },
+      "description": "Server-side Telegram update idempotency records."
     }
   }
 }

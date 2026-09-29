@@ -37,5 +37,47 @@ service cloud.firestore {
         );
       }
     }
+
+    function isWorker() {
+      return isAuthenticated() && request.auth.token.email == 'telegram_worker@savdobot.uz';
+    }
+
+    function canAccessBusinessData(bizId) {
+      return isAuthenticated() && (
+        isWorker() ||
+        (bizId != null && (
+          get(/databases/$(database)/documents/businesses/$(bizId)).data.userId == request.auth.uid ||
+          get(/databases/$(database)/documents/businesses/$(bizId)).data.ownerUid == request.auth.uid
+        ))
+      );
+    }
+
+    // Tenant-isolated Customers collection
+    match /customers/{customerId} {
+      allow create: if isWorker() || (isAuthenticated() && canAccessBusinessData(request.resource.data.businessId));
+      allow read, update, delete: if isWorker() || (isAuthenticated() && canAccessBusinessData(resource.data.businessId));
+    }
+
+    // Tenant-isolated Conversations collection & messages subcollection
+    match /conversations/{conversationId} {
+      allow create: if isWorker() || (isAuthenticated() && canAccessBusinessData(request.resource.data.businessId));
+      allow read, update, delete: if isWorker() || (isAuthenticated() && canAccessBusinessData(resource.data.businessId));
+
+      match /messages/{messageId} {
+        allow create: if isWorker() || (isAuthenticated() && canAccessBusinessData(request.resource.data.businessId));
+        allow read, update, delete: if isWorker() || (isAuthenticated() && canAccessBusinessData(resource.data.businessId));
+      }
+    }
+
+    // Tenant-isolated Orders collection
+    match /orders/{orderId} {
+      allow create: if isWorker() || (isAuthenticated() && canAccessBusinessData(request.resource.data.businessId));
+      allow read, update, delete: if isWorker() || (isAuthenticated() && canAccessBusinessData(resource.data.businessId));
+    }
+
+    // System-only Idempotency collection
+    match /telegram_updates/{updateId} {
+      allow read, write: if isWorker();
+    }
   }
 }

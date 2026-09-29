@@ -214,7 +214,7 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
                 </div>
                 <div className="flex justify-between">
                   <span>Yetkazib berish:</span>
-                  <span>{activeOrder.deliveryFee.toLocaleString()} so'm</span>
+                  <span>{(activeOrder.deliveryFee || activeOrder.deliveryPrice || 0).toLocaleString()} so'm</span>
                 </div>
                 <div className="flex justify-between font-bold text-slate-900 text-sm pt-1 border-t border-slate-200">
                   <span>Jami:</span>

@@ -264,7 +264,7 @@ export class DataStore {
       cust.totalOrders += 1;
       cust.totalSpent += order.total;
       cust.status = 'Buyurtma berdi';
-      cust.leadScore = Math.min(100, cust.leadScore + 15);
+      cust.leadScore = Math.min(100, (cust.leadScore || 50) + 15);
       cust.lastInteraction = Date.now();
       saveLocal('customers', customers);
       try {

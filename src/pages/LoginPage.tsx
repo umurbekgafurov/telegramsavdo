@@ -27,7 +27,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
       await AuthService.loginUser(email, password);
       onSuccess();
     } catch (err: any) {
-      console.error('Login error:', err);
+      console.warn('Login notice:', err.code || err.message);
       let msg = err.message || 'Xatolik yuz berdi. Iltimos qaytadan urinib ko\'ring.';
       if (err.code === 'auth/operation-not-allowed' || (err.message && err.message.includes('auth/operation-not-allowed'))) {
         msg = 'Firebase Authentication xizmatida "Email/Password" usuli hali yoqilmagan. Iltimos, Firebase Console (https://console.firebase.google.com) -> Authentication -> Sign-in method bo\'limiga o\'tib, "Email/Password" provayderini "Enable" qilib saqlang.';

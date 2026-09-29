@@ -18,6 +18,7 @@ import { ProductNewPage } from './pages/ProductNewPage';
 import { ProductDetailPage } from './pages/ProductDetailPage';
 import { WarehouseView } from './components/WarehouseView';
 import { CustomersView } from './components/CustomersView';
+import { ConversationsView } from './components/ConversationsView';
 import { OrdersView } from './components/OrdersView';
 import { TelegramBotView } from './components/TelegramBotView';
 import { AIRecommendationsView } from './components/AIRecommendationsView';
@@ -31,15 +32,27 @@ import {
   Product,
   Warehouse,
   Customer,
+  Conversation,
   Order,
   StockMovement,
   AIFollowupRecommendation,
   Business
 } from './types';
-import { AuthService, FirestoreService, UserDocument } from './services/firebaseService';
+import { AuthService, FirestoreService, UserDocument, AppAuthUser } from './services/firebaseService';
+import { CustomerService } from './services/customerService';
+import { ConversationService } from './services/conversationService';
+import { OrderService } from './services/orderService';
+import {
+  INITIAL_WAREHOUSES,
+  INITIAL_PRODUCTS,
+  INITIAL_CUSTOMERS,
+  INITIAL_ORDERS,
+  INITIAL_STOCK_MOVEMENTS,
+  INITIAL_FOLLOWUPS
+} from './data/mockData';
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
+  const [currentUser, setCurrentUser] = useState<FirebaseUser | AppAuthUser | null>(null);
   const [userDoc, setUserDoc] = useState<UserDocument | null>(null);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
 
@@ -56,6 +69,7 @@ export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [movements, setMovements] = useState<StockMovement[]>([]);
   const [followups, setFollowups] = useState<AIFollowupRecommendation[]>([]);
@@ -118,23 +132,54 @@ export default function App() {
         setUserDoc(uDoc);
         setBusiness(biz);
 
-        // Fetch subcollections for this specific business from Firestore
-        const [prods, whs, custs, ords, movs] = await Promise.all([
-          FirestoreService.getProducts(biz.id),
-          FirestoreService.getWarehouses(biz.id),
-          FirestoreService.getCustomers(biz.id),
-          FirestoreService.getOrders(biz.id),
-          FirestoreService.getStockMovements(biz.id)
-        ]);
+        // Fetch subcollections for this specific business from Firestore with template fallback
+        try {
+          const [prods, whs, custs, ords, movs] = await Promise.all([
+            FirestoreService.getProducts(biz.id),
+            FirestoreService.getWarehouses(biz.id),
+            FirestoreService.getCustomers(biz.id),
+            FirestoreService.getOrders(biz.id),
+            FirestoreService.getStockMovements(biz.id)
+          ]);
 
-        setProducts(prods);
-        setWarehouses(whs);
-        setCustomers(custs);
-        setOrders(ords);
-        setMovements(movs);
+          setProducts(prods && prods.length > 0 ? prods : INITIAL_PRODUCTS.map(p => ({ ...p, businessId: biz.id })));
+          setWarehouses(whs && whs.length > 0 ? whs : INITIAL_WAREHOUSES.map(w => ({ ...w, businessId: biz.id })));
+          setCustomers(custs && custs.length > 0 ? custs : INITIAL_CUSTOMERS.map(c => ({ ...c, businessId: biz.id })));
+          setOrders(ords && ords.length > 0 ? ords : INITIAL_ORDERS.map(o => ({ ...o, businessId: biz.id })));
+          setMovements(movs && movs.length > 0 ? movs : INITIAL_STOCK_MOVEMENTS.map((m: StockMovement) => ({ ...m, businessId: biz.id })));
+        } catch (fErr) {
+          console.warn('Notice loading Firestore subcollections, using template data:', fErr);
+          setProducts(INITIAL_PRODUCTS.map(p => ({ ...p, businessId: biz.id })));
+          setWarehouses(INITIAL_WAREHOUSES.map(w => ({ ...w, businessId: biz.id })));
+          setCustomers(INITIAL_CUSTOMERS.map(c => ({ ...c, businessId: biz.id })));
+          setOrders(INITIAL_ORDERS.map(o => ({ ...o, businessId: biz.id })));
+          setMovements(INITIAL_STOCK_MOVEMENTS.map((m: StockMovement) => ({ ...m, businessId: biz.id })));
+        }
+        setFollowups(INITIAL_FOLLOWUPS);
+
+        // Realtime Firestore listeners for customers, conversations, and orders
+        try {
+          CustomerService.subscribeCustomers(biz.id, (realtimeCusts) => {
+            if (realtimeCusts && realtimeCusts.length > 0) {
+              setCustomers(realtimeCusts);
+            }
+          });
+
+          ConversationService.subscribeConversations(biz.id, (realtimeConvs) => {
+            setConversations(realtimeConvs);
+          });
+
+          OrderService.subscribeOrders(biz.id, (realtimeOrds) => {
+            if (realtimeOrds && realtimeOrds.length > 0) {
+              setOrders(realtimeOrds);
+            }
+          });
+        } catch (subErr) {
+          console.warn('Realtime subscription notice:', subErr);
+        }
       }
     } catch (err) {
-      console.error('Failed to load business data from Firestore:', err);
+      console.warn('Notice loading business data:', err);
     } finally {
       setIsLoadingData(false);
     }
@@ -153,85 +198,131 @@ export default function App() {
       createdAt: now,
       updatedAt: now,
     };
-    await FirestoreService.saveWarehouse(business.id, newWh);
-    const updated = await FirestoreService.getWarehouses(business.id);
-    setWarehouses(updated);
+    try {
+      await FirestoreService.saveWarehouse(business.id, newWh);
+      const updated = await FirestoreService.getWarehouses(business.id);
+      setWarehouses(updated);
+    } catch {
+      setWarehouses((prev) => [newWh, ...prev]);
+    }
   };
 
   const handleUpdateWarehouse = async (warehouse: Warehouse) => {
     if (!business) return;
-    await FirestoreService.saveWarehouse(business.id, warehouse);
-    const updated = await FirestoreService.getWarehouses(business.id);
-    setWarehouses(updated);
+    try {
+      await FirestoreService.saveWarehouse(business.id, warehouse);
+      const updated = await FirestoreService.getWarehouses(business.id);
+      setWarehouses(updated);
+    } catch {
+      setWarehouses((prev) => prev.map((w) => (w.id === warehouse.id ? warehouse : w)));
+    }
   };
 
   const handleDeleteWarehouse = async (warehouseId: string) => {
     if (!business) return;
-    await FirestoreService.deleteWarehouse(business.id, warehouseId);
-    const updated = await FirestoreService.getWarehouses(business.id);
-    setWarehouses(updated);
+    try {
+      await FirestoreService.deleteWarehouse(business.id, warehouseId);
+      const updated = await FirestoreService.getWarehouses(business.id);
+      setWarehouses(updated);
+    } catch {
+      setWarehouses((prev) => prev.filter((w) => w.id !== warehouseId));
+    }
   };
 
   // Handlers for Products
   const handleCreateProduct = async (prod: Product) => {
     if (!business) return;
-    await FirestoreService.createProduct(business.id, prod, currentUser?.displayName || 'Admin');
-    const [updatedProds, updatedMovs] = await Promise.all([
-      FirestoreService.getProducts(business.id),
-      FirestoreService.getStockMovements(business.id),
-    ]);
-    setProducts(updatedProds);
-    setMovements(updatedMovs);
+    try {
+      await FirestoreService.createProduct(business.id, prod, currentUser?.displayName || 'Admin');
+      const [updatedProds, updatedMovs] = await Promise.all([
+        FirestoreService.getProducts(business.id),
+        FirestoreService.getStockMovements(business.id),
+      ]);
+      setProducts(updatedProds);
+      setMovements(updatedMovs);
+    } catch {
+      setProducts((prev) => [prod, ...prev]);
+    }
   };
 
   const handleUpdateProduct = async (prod: Product) => {
     if (!business) return;
-    await FirestoreService.updateProduct(business.id, prod);
-    const updated = await FirestoreService.getProducts(business.id);
-    setProducts(updated);
+    try {
+      await FirestoreService.updateProduct(business.id, prod);
+      const updated = await FirestoreService.getProducts(business.id);
+      setProducts(updated);
+    } catch {
+      setProducts((prev) => prev.map((p) => (p.id === prod.id ? prod : p)));
+    }
   };
 
   const handleDeleteProduct = async (id: string) => {
     if (!business) return;
-    await FirestoreService.deleteProduct(business.id, id);
-    const updated = await FirestoreService.getProducts(business.id);
-    setProducts(updated);
+    try {
+      await FirestoreService.deleteProduct(business.id, id);
+      const updated = await FirestoreService.getProducts(business.id);
+      setProducts(updated);
+    } catch {
+      setProducts((prev) => prev.filter((p) => p.id !== id));
+    }
   };
 
   // Handlers for Stock Movements
   const handleAddStockMovement = async (movement: StockMovement) => {
     if (!business) return;
-    await FirestoreService.addStockMovement(business.id, movement);
-    const [movs, prods] = await Promise.all([
-      FirestoreService.getStockMovements(business.id),
-      FirestoreService.getProducts(business.id)
-    ]);
-    setMovements(movs);
-    setProducts(prods);
+    try {
+      await FirestoreService.addStockMovement(business.id, movement);
+      const [movs, prods] = await Promise.all([
+        FirestoreService.getStockMovements(business.id),
+        FirestoreService.getProducts(business.id)
+      ]);
+      setMovements(movs);
+      setProducts(prods);
+    } catch {
+      setMovements((prev) => [movement, ...prev]);
+      setProducts((prev) =>
+        prev.map((p) =>
+          p.id === movement.productId
+            ? { ...p, stock: Math.max(0, p.stock + (movement.type === 'STOCK_IN' ? movement.quantity : -movement.quantity)) }
+            : p
+        )
+      );
+    }
   };
 
   // Handlers for Customers
   const handleSaveCustomer = async (cust: Customer) => {
     if (!business) return;
-    await FirestoreService.saveCustomer(business.id, cust);
-    const updated = await FirestoreService.getCustomers(business.id);
-    setCustomers(updated);
+    try {
+      await FirestoreService.saveCustomer(business.id, cust);
+      const updated = await FirestoreService.getCustomers(business.id);
+      setCustomers(updated);
+    } catch {
+      setCustomers((prev) => {
+        const exists = prev.some((c) => c.id === cust.id);
+        return exists ? prev.map((c) => (c.id === cust.id ? cust : c)) : [cust, ...prev];
+      });
+    }
   };
 
   // Handlers for Orders
   const handleCreateOrder = async (order: Order) => {
     if (!business) return;
-    await FirestoreService.createOrder(business.id, order);
-    const [ords, prods, custs, movs] = await Promise.all([
-      FirestoreService.getOrders(business.id),
-      FirestoreService.getProducts(business.id),
-      FirestoreService.getCustomers(business.id),
-      FirestoreService.getStockMovements(business.id),
-    ]);
-    setOrders(ords);
-    setProducts(prods);
-    setCustomers(custs);
-    setMovements(movs);
+    try {
+      await FirestoreService.createOrder(business.id, order);
+      const [ords, prods, custs, movs] = await Promise.all([
+        FirestoreService.getOrders(business.id),
+        FirestoreService.getProducts(business.id),
+        FirestoreService.getCustomers(business.id),
+        FirestoreService.getStockMovements(business.id),
+      ]);
+      setOrders(ords);
+      setProducts(prods);
+      setCustomers(custs);
+      setMovements(movs);
+    } catch {
+      setOrders((prev) => [order, ...prev]);
+    }
   };
 
   const handleUpdateOrderStatus = async (
@@ -240,9 +331,24 @@ export default function App() {
     paymentStatus?: Order['paymentStatus']
   ) => {
     if (!business) return;
-    await FirestoreService.updateOrderStatus(business.id, orderId, orderStatus, paymentStatus);
-    const ords = await FirestoreService.getOrders(business.id);
-    setOrders(ords);
+    try {
+      await FirestoreService.updateOrderStatus(business.id, orderId, orderStatus, paymentStatus);
+      const ords = await FirestoreService.getOrders(business.id);
+      setOrders(ords);
+    } catch {
+      setOrders((prev) =>
+        prev.map((o) =>
+          o.id === orderId
+            ? {
+                ...o,
+                orderStatus,
+                ...(paymentStatus ? { paymentStatus } : {}),
+                updatedAt: Date.now(),
+              }
+            : o
+        )
+      );
+    }
   };
 
   // Handlers for Followups
@@ -366,10 +472,17 @@ export default function App() {
               <span className="font-bold text-slate-900 text-sm hidden sm:inline">
                 {business?.name || "Yuklanmoqda..."}
               </span>
-              <span className="px-2 py-0.5 text-[10px] font-bold text-emerald-700 bg-emerald-50 rounded-full border border-emerald-200 flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                Cloud Firestore Ulangan
-              </span>
+              {currentUser && (currentUser as any).isDemo ? (
+                <span className="px-2 py-0.5 text-[10px] font-bold text-amber-700 bg-amber-50 rounded-full border border-amber-200 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                  Sinov / Demo Rejimi
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 text-[10px] font-bold text-emerald-700 bg-emerald-50 rounded-full border border-emerald-200 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  Cloud Firestore Ulangan
+                </span>
+              )}
             </div>
           </div>
 
@@ -483,6 +596,17 @@ export default function App() {
                     else if (tab === 'products') navigate('/products');
                   }}
                   onTriggerTelegramDemo={() => setCurrentTab('telegram')}
+                />
+              )}
+
+              {/* Conversations tab */}
+              {currentPath === '/dashboard' && currentTab === 'conversations' && business && (
+                <ConversationsView
+                  businessId={business.id}
+                  conversations={conversations}
+                  customers={customers}
+                  orders={orders}
+                  onRefresh={() => currentUser && loadUserData(currentUser.uid)}
                 />
               )}
 

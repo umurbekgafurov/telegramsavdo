@@ -3,7 +3,7 @@ import { getFirestore } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import configJson from '../../firebase-applet-config.json';
 
-const firebaseConfig = {
+export const firebaseConfig = {
   apiKey: configJson.apiKey,
   authDomain: configJson.authDomain,
   projectId: configJson.projectId,
@@ -12,13 +12,13 @@ const firebaseConfig = {
   appId: configJson.appId,
 };
 
-// Clear console diagnostic logging as requested by user
+// Diagnostic logging as requested
 console.log('====================================');
 console.log('[Firebase Init Diagnostic]');
-console.log('Firebase Project ID being used:', configJson.projectId);
-console.log('Auth Domain:', configJson.authDomain);
+console.log('Firebase runtime project:', firebaseConfig.projectId);
+console.log('Auth Domain:', firebaseConfig.authDomain);
 console.log('Firestore Database ID:', configJson.firestoreDatabaseId || '(default)');
-console.log('App ID:', configJson.appId);
+console.log('App ID:', firebaseConfig.appId);
 console.log('====================================');
 
 // Initialize Firebase App

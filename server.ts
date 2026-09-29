@@ -3,6 +3,13 @@ import type { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { WebhookSecurity } from './server/telegram/webhookSecurity';
+import { UpdateProcessor } from './server/telegram/updateProcessor';
+import { TelegramClient } from './server/telegram/telegramClient';
+import { initWorkerAuth } from './server/initWorkerAuth';
+import { AIParser } from './server/telegram/aiParser';
+import { GroundingEngine } from './server/telegram/groundingEngine';
+import { AIResponder } from './server/telegram/aiResponder';
 
 dotenv.config();
 
@@ -27,6 +34,7 @@ console.log('1. TELEGRAM_BOT_TOKEN set on server:', Boolean(TELEGRAM_BOT_TOKEN))
 console.log('2. TELEGRAM_WEBHOOK_SECRET set on server:', Boolean(TELEGRAM_WEBHOOK_SECRET));
 console.log('3. APP_URL:', APP_URL || '(None - Localhost)');
 console.log('4. Environment:', process.env.NODE_ENV || 'development');
+console.log('5. Firebase Project:', process.env.FIREBASE_PROJECT_ID || 'ai-savdobot');
 console.log('==================================================');
 
 /**
@@ -34,173 +42,72 @@ console.log('==================================================');
  */
 async function verifyTelegramBotConnection() {
   if (!TELEGRAM_BOT_TOKEN) {
-    console.error('[Telegram API] ❌ TELEGRAM_BOT_TOKEN is missing on server.');
+    console.warn('[Telegram API] ℹ️ TELEGRAM_BOT_TOKEN is not configured on server. CRM starting in standalone mode.');
     return { ok: false, error: 'TELEGRAM_BOT_TOKEN not configured' };
   }
 
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe`);
-    const data = await res.json();
-    if (data.ok) {
-      console.log(`[Telegram API] ✅ Bot Connected! Name: "${data.result.first_name}", Username: @${data.result.username}, ID: ${data.result.id}`);
-    } else {
-      console.error('[Telegram API] ❌ getMe failed:', data);
-    }
-    return data;
-  } catch (err: any) {
-    console.error('[Telegram API] ❌ Connection error:', err.message);
-    return { ok: false, error: err.message };
+  const result = await TelegramClient.getMe();
+  if (result.ok && result.result) {
+    console.log(`[Telegram API] ✅ Bot Connected! Name: "${result.result.first_name}", Username: @${result.result.username}, ID: ${result.result.id}`);
+  } else {
+    console.warn('[Telegram API] ⚠️ getMe failed or bot token invalid:', result.error || result);
   }
-}
-
-/**
- * 10. Send a test/live reply back to Telegram
- */
-async function sendTelegramMessage(chatId: number | string, text: string) {
-  if (!TELEGRAM_BOT_TOKEN) {
-    console.error('[Telegram API] Cannot send message: token is missing.');
-    return { ok: false, error: 'Token missing' };
-  }
-
-  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-      }),
-    });
-    const data = await res.json();
-    console.log(`[Telegram API] 📤 Message sent to ${chatId}: ${data.ok ? 'SUCCESS' : JSON.stringify(data)}`);
-    return data;
-  } catch (err: any) {
-    console.error(`[Telegram API] ❌ Failed to send message to ${chatId}:`, err.message);
-    return { ok: false, error: err.message };
-  }
-}
-
-/**
- * Central update processor for /start, text messages, and commands
- */
-async function handleTelegramUpdate(update: any): Promise<{ handled: string }> {
-  // 7. Log incoming Telegram updates on the server
-  console.log('[Telegram Core] 📥 Received Update:', JSON.stringify(update, null, 2));
-
-  const message = update?.message;
-  if (!message) {
-    return { handled: 'ignored_no_message' };
-  }
-
-  const chatId = message.chat?.id;
-  const userText = (message.text || '').trim();
-  const senderName = message.from?.first_name || message.from?.username || 'Foydalanuvchi';
-
-  console.log(`[Telegram Core] Message from "${senderName}" (Chat: ${chatId}): "${userText}"`);
-
-  if (!chatId) {
-    return { handled: 'no_chat_id' };
-  }
-
-  // 8. Handle /start
-  // Required response:
-  // "Assalomu alaykum! 👋\nAI SavdoBot ishga tushdi."
-  if (userText === '/start' || userText.startsWith('/start ')) {
-    const startReply = `Assalomu alaykum! 👋\nAI SavdoBot ishga tushdi.`;
-    console.log(`[Telegram Core] Replying to /start for chat ${chatId}`);
-    await sendTelegramMessage(chatId, startReply);
-    return { handled: '/start' };
-  }
-
-  // 9. Handle normal text messages
-  if (userText) {
-    const textReply = `Assalomu alaykum, ${senderName}! 👋\n\nXabaringiz qabul qilindi: "${userText}"\n\n🛍 AI SavdoBot sizga mahsulotlar katalogi, narxlar va buyurtma berishda yordam beradi. Tez orada do'kon ma'muri yoki AI agent sizga javob beradi.`;
-    console.log(`[Telegram Core] Replying to text message for chat ${chatId}`);
-    await sendTelegramMessage(chatId, textReply);
-    return { handled: 'text_message' };
-  }
-
-  // Media / non-text messages
-  if (message.photo || message.voice || message.document || message.sticker) {
-    await sendTelegramMessage(
-      chatId,
-      `Xabaringiz qabul qilindi! Buyurtma yoki savollaringiz bo'lsa, iltimos matn shaklida yozib yuboring.`
-    );
-    return { handled: 'media' };
-  }
-
-  return { handled: 'other' };
+  return result;
 }
 
 /**
  * 4. Server-side Telegram webhook endpoint: POST /api/telegram/webhook
- * 6. Webhook secret verification for security
+ * 5. Webhook secret verification for security
  */
 app.post('/api/telegram/webhook', async (req: Request, res: Response) => {
-  const secretHeader = req.headers['x-telegram-bot-api-secret-token'];
-
-  // Validate secret if configured
-  if (TELEGRAM_WEBHOOK_SECRET && secretHeader !== TELEGRAM_WEBHOOK_SECRET) {
-    console.warn('[Telegram Webhook] ⚠️ Rejected update: secret token mismatch.');
+  // Validate secret token header
+  const security = WebhookSecurity.validateRequest(req);
+  if (!security.valid) {
+    console.warn('[Telegram Webhook] ⚠️ Rejected update:', security.reason);
     return res.status(403).json({ error: 'Unauthorized: invalid webhook secret' });
   }
 
   try {
-    const result = await handleTelegramUpdate(req.body);
-    return res.status(200).json({ ok: true, result });
+    const processResult = await UpdateProcessor.processUpdate(req.body);
+    return res.status(200).json({ ok: true, result: processResult });
   } catch (err: any) {
     console.error('[Telegram Webhook] Error processing update:', err);
-    return res.status(500).json({ ok: false, error: err.message });
+    return res.status(200).json({ ok: false, error: err.message });
   }
 });
 
 /**
- * 5. Register the webhook with Telegram using the configured bot token & secret
+ * Webhook Management Utilities
  */
-async function registerTelegramWebhook(customUrl?: string) {
-  if (!TELEGRAM_BOT_TOKEN) {
-    return { ok: false, error: 'TELEGRAM_BOT_TOKEN is not configured' };
-  }
+app.post('/api/telegram/set-webhook', async (req: Request, res: Response) => {
+  const customUrl = req.body?.url || `${APP_URL}/api/telegram/webhook`;
+  const secret = req.body?.secret || TELEGRAM_WEBHOOK_SECRET;
+  const result = await TelegramClient.setTelegramWebhook(customUrl, secret);
+  res.json(result);
+});
 
-  const baseUrl = (customUrl || APP_URL).replace(/\/$/, '');
-  if (!baseUrl || baseUrl.includes('localhost') || baseUrl.includes('127.0.0.1')) {
-    const msg = 'Telegram Webhooks require a public HTTPS URL. Localhost is not reachable by Telegram.';
-    console.warn(`[Telegram Webhook] ⚠️ ${msg}`);
-    return { ok: false, error: msg, isLocalhost: true };
-  }
+app.post('/api/telegram/delete-webhook', async (_req: Request, res: Response) => {
+  const result = await TelegramClient.deleteTelegramWebhook();
+  res.json(result);
+});
 
-  const webhookUrl = `${baseUrl}/api/telegram/webhook`;
-  console.log(`[Telegram Webhook] 🌐 Registering webhook: ${webhookUrl}`);
+app.get('/api/telegram/webhook-info', async (_req: Request, res: Response) => {
+  const result = await TelegramClient.getTelegramWebhookInfo();
+  res.json(result);
+});
 
-  try {
-    const payload: Record<string, any> = {
-      url: webhookUrl,
-      allowed_updates: ['message', 'callback_query'],
-      drop_pending_updates: false,
-    };
-    if (TELEGRAM_WEBHOOK_SECRET) {
-      payload.secret_token = TELEGRAM_WEBHOOK_SECRET;
-    }
-
-    const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json();
-    console.log('[Telegram Webhook] setWebhook response:', data);
-    return { ok: data.ok, webhookUrl, data };
-  } catch (err: any) {
-    console.error('[Telegram Webhook] setWebhook error:', err);
-    return { ok: false, error: err.message };
-  }
-}
+/**
+ * Backward compatibility endpoints for UI
+ */
+app.post('/api/telegram/register-webhook', async (req: Request, res: Response) => {
+  const customUrl = req.body?.url || `${APP_URL}/api/telegram/webhook`;
+  stopPollingWorker();
+  const result = await TelegramClient.setTelegramWebhook(customUrl, TELEGRAM_WEBHOOK_SECRET);
+  res.json({ ok: result.ok, webhookUrl: customUrl, data: result });
+});
 
 /**
  * Polling Worker (Development & Fallback Engine)
- * Automatically ensures the bot works when webhooks are blocked by dev authentication proxies (302 redirects)
- * or when developing on localhost.
  */
 let isPollingActive = false;
 let pollingOffset = 0;
@@ -212,12 +119,7 @@ async function startPollingWorker() {
   console.log('[Telegram Polling Worker] 🚀 Starting polling listener for instant development messaging...');
 
   // Delete webhook so Telegram delivers updates to getUpdates
-  try {
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/deleteWebhook`);
-    console.log('[Telegram Polling Worker] Webhook deleted for active polling session.');
-  } catch (e) {
-    console.warn('[Telegram Polling Worker] Notice deleting webhook:', e);
-  }
+  await TelegramClient.deleteTelegramWebhook();
 
   // Polling loop
   (async () => {
@@ -235,11 +137,10 @@ async function startPollingWorker() {
         if (data.ok && Array.isArray(data.result)) {
           for (const update of data.result) {
             pollingOffset = update.update_id + 1;
-            await handleTelegramUpdate(update);
+            await UpdateProcessor.processUpdate(update);
           }
         }
-      } catch (err: any) {
-        // Transient network delay
+      } catch {
         await new Promise((r) => setTimeout(r, 2500));
       }
     }
@@ -259,8 +160,8 @@ app.get('/api/telegram/status', async (_req: Request, res: Response) => {
   if (TELEGRAM_BOT_TOKEN) {
     try {
       const [meRes, whRes] = await Promise.all([
-        fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe`).then((r) => r.json()),
-        fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo`).then((r) => r.json()),
+        TelegramClient.getMe(),
+        TelegramClient.getTelegramWebhookInfo(),
       ]);
       botInfo = meRes;
       webhookInfo = whRes;
@@ -281,15 +182,6 @@ app.get('/api/telegram/status', async (_req: Request, res: Response) => {
   });
 });
 
-// API to register webhook on demand
-app.post('/api/telegram/register-webhook', async (req: Request, res: Response) => {
-  const customUrl = req.body?.url;
-  stopPollingWorker();
-  const regResult = await registerTelegramWebhook(customUrl);
-  res.json(regResult);
-});
-
-// API to switch to polling mode (for local / dev)
 app.post('/api/telegram/enable-polling', async (_req: Request, res: Response) => {
   startPollingWorker();
   res.json({ ok: true, isPollingActive: true });
@@ -305,8 +197,72 @@ app.get('/api/health', (_req: Request, res: Response) => {
   });
 });
 
+app.post('/api/telegram/send-message', async (req: Request, res: Response) => {
+  const { chatId, text } = req.body;
+  if (!chatId || !text) {
+    return res.status(400).json({ ok: false, error: 'chatId and text required' });
+  }
+  const result = await TelegramClient.sendMessage(chatId, text);
+  res.json(result);
+});
+
+/**
+ * AI Pipeline Testing Endpoint
+ * Allows testing the complete AI Parser -> Intent -> Grounding -> AI Response flow
+ */
+app.post('/api/telegram/test-ai-pipeline', async (req: Request, res: Response) => {
+  const { text, businessId = 'biz-default', customerName = 'Sinovchi' } = req.body;
+  if (!text || typeof text !== 'string') {
+    return res.status(400).json({ ok: false, error: 'Text query is required' });
+  }
+
+  try {
+    // 1. AI Parser
+    const parsedIntent = await AIParser.parseIntent(text);
+
+    // 2. Grounding Engine (Product / Warehouse / Order)
+    const groundedContext = await GroundingEngine.ground({
+      businessId,
+      customerId: 'test_cust_sim',
+      conversationId: 'test_conv_sim',
+      customerName,
+      parsedIntent,
+      rawMessageText: text,
+    });
+
+    // 3. AI Response Generator
+    const aiResponseText = await AIResponder.generateResponse({
+      customerName,
+      rawMessageText: text,
+      groundedContext,
+    });
+
+    res.json({
+      ok: true,
+      query: text,
+      parsedIntent,
+      groundedContext: {
+        intent: groundedContext.intent,
+        matchedProductsCount: groundedContext.matchedProducts.length,
+        topProduct: groundedContext.matchedProducts[0]?.name || null,
+        topProductPrice: groundedContext.matchedProducts[0]?.price || null,
+        warehouseStock: groundedContext.warehouseStock,
+        draftOrderId: groundedContext.draftOrder?.id || null,
+        draftOrderTotal: groundedContext.draftOrder?.total || null,
+      },
+      aiResponseText,
+    });
+  } catch (err: any) {
+    console.error('[API test-ai-pipeline error]', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // Server Initialization
 async function startServer() {
+  // Initialize worker authentication for Firestore persistence
+  await initWorkerAuth();
+
   if (!isProd) {
     // Mount Vite dev server middleware (Full-Stack Express + Vite)
     const { createServer: createViteServer } = await import('vite');
@@ -332,13 +288,16 @@ async function startServer() {
 
     // Start polling in development or if webhook is unreachable (e.g. 302 on dev domain or localhost)
     if (!isProd || !APP_URL || APP_URL.includes('localhost') || APP_URL.includes('ais-dev-')) {
-      console.log('[Telegram Bot] Starting polling worker for reliable development response.');
-      await startPollingWorker();
-    } else {
+      if (TELEGRAM_BOT_TOKEN) {
+        console.log('[Telegram Bot] Starting polling worker for reliable development response.');
+        await startPollingWorker();
+      }
+    } else if (TELEGRAM_BOT_TOKEN) {
       console.log('[Telegram Bot] Registering production webhook...');
-      await registerTelegramWebhook();
+      await TelegramClient.setTelegramWebhook(`${APP_URL}/api/telegram/webhook`, TELEGRAM_WEBHOOK_SECRET);
     }
   });
 }
 
 startServer();
+

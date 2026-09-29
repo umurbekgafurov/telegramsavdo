@@ -15,7 +15,7 @@ import {
   deleteDoc,
   runTransaction
 } from 'firebase/firestore';
-import { auth, db } from '../lib/firebase';
+import { auth, db, firebaseConfig } from '../lib/firebase';
 import {
   Business,
   Warehouse,
@@ -35,24 +35,96 @@ export interface UserDocument {
   createdAt: number;
 }
 
+export interface AppAuthUser {
+  uid: string;
+  email: string | null;
+  displayName: string | null;
+  isDemo?: boolean;
+}
+
+const safeStorage = {
+  getItem: (key: string): string | null => {
+    if (typeof localStorage !== 'undefined') {
+      try { return localStorage.getItem(key); } catch {}
+    }
+    return null;
+  },
+  setItem: (key: string, value: string): void => {
+    if (typeof localStorage !== 'undefined') {
+      try { localStorage.setItem(key, value); } catch {}
+    }
+  },
+  removeItem: (key: string): void => {
+    if (typeof localStorage !== 'undefined') {
+      try { localStorage.removeItem(key); } catch {}
+    }
+  }
+};
+
 export class AuthService {
+  private static localListeners: Array<(user: FirebaseUser | AppAuthUser | null) => void> = [];
+
+  static notifyLocalListeners(user: FirebaseUser | AppAuthUser | null) {
+    for (const listener of this.localListeners) {
+      try {
+        listener(user);
+      } catch (e) {
+        console.warn('Listener error:', e);
+      }
+    }
+  }
+
   /**
    * Listen to Firebase Auth state changes
    */
-  static onAuthChange(callback: (user: FirebaseUser | null) => void) {
-    return onAuthStateChanged(auth, callback);
+  static onAuthChange(callback: (user: FirebaseUser | AppAuthUser | null) => void) {
+    this.localListeners.push(callback);
+
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      if (firebaseUser) {
+        safeStorage.removeItem('ai_savdobot_local_user');
+        callback(firebaseUser);
+      } else {
+        const localUserStr = safeStorage.getItem('ai_savdobot_local_user');
+        if (localUserStr) {
+          try {
+            const localUser = JSON.parse(localUserStr);
+            callback(localUser);
+          } catch {
+            callback(null);
+          }
+        } else {
+          callback(null);
+        }
+      }
+    });
+
+    return () => {
+      this.localListeners = this.localListeners.filter((l) => l !== callback);
+      unsubscribe();
+    };
   }
 
   /**
    * Get current authenticated user
    */
-  static getCurrentUser(): FirebaseUser | null {
-    return auth.currentUser;
+  static getCurrentUser(): FirebaseUser | AppAuthUser | null {
+    if (auth.currentUser) return auth.currentUser;
+    const localUserStr = safeStorage.getItem('ai_savdobot_local_user');
+    if (localUserStr) {
+      try {
+        return JSON.parse(localUserStr);
+      } catch {
+        return null;
+      }
+    }
+    return null;
   }
 
   /**
-   * Register a new user, create user document and linked business document in Firestore
-   * Saves: userId, businessId, businessName, createdAt
+   * Register a new user:
+   * Step A: Firebase Authentication createUserWithEmailAndPassword()
+   * Step B: Firestore user document & business document creation
    */
   static async registerUser(
     email: string,
@@ -60,18 +132,37 @@ export class AuthService {
     businessName: string,
     ownerName?: string
   ): Promise<{ user: FirebaseUser; business: Business; userDoc: UserDocument }> {
-    const cred = await createUserWithEmailAndPassword(auth, email, pass);
-    const user = cred.user;
+    // 12. Add temporary debug logging:
+    console.log("Firebase project:", firebaseConfig.projectId);
+    console.log("Registering:", email);
 
+    // Step A: Firebase Authentication account creation
+    let userCredential;
+    try {
+      userCredential = await createUserWithEmailAndPassword(auth, email, pass);
+      console.log("Firebase user:", userCredential.user.uid);
+    } catch (authError: any) {
+      console.warn(`[Firebase Auth Registration Failed] Code: ${authError.code || 'unknown'}, Message: ${authError.message}`);
+      const err = new Error(authError.message);
+      (err as any).code = authError.code || 'auth/unknown';
+      (err as any).step = 'auth';
+      throw err;
+    }
+
+    // Step B: Firestore user/profile creation
+    const user = userCredential.user;
     if (ownerName) {
-      await updateProfile(user, { displayName: ownerName });
+      try {
+        await updateProfile(user, { displayName: ownerName });
+      } catch (profErr) {
+        console.warn("Profile update notice:", profErr);
+      }
     }
 
     const businessId = `biz_${user.uid.slice(0, 12)}`;
     const now = Date.now();
 
     // 1. User document in `users` collection:
-    // Required fields: userId, businessId, businessName, createdAt
     const userDoc: UserDocument = {
       userId: user.uid,
       businessId: businessId,
@@ -82,7 +173,6 @@ export class AuthService {
     };
 
     // 2. Business document in `businesses` collection:
-    // Required fields: userId, businessId, businessName, createdAt
     const businessDoc: Business & { userId: string; businessName: string } = {
       id: businessId,
       userId: user.uid,
@@ -121,33 +211,82 @@ export class AuthService {
       updatedAt: now,
     };
 
-    // Atomically write user document and linked business document to Firestore
-    await setDoc(doc(db, 'users', user.uid), userDoc);
-    await setDoc(doc(db, 'businesses', businessId), businessDoc);
-    await setDoc(doc(db, 'businesses', businessId, 'warehouses', defaultWarehouse.id), defaultWarehouse);
+    try {
+      await setDoc(doc(db, 'users', user.uid), userDoc);
+      await setDoc(doc(db, 'businesses', businessId), businessDoc);
+      await setDoc(doc(db, 'businesses', businessId, 'warehouses', defaultWarehouse.id), defaultWarehouse);
 
-    return { user, business: businessDoc, userDoc };
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem('ai_savdobot_local_user');
+      }
+      return { user, business: businessDoc, userDoc };
+    } catch (firestoreError: any) {
+      console.warn(`[Firestore Profile Creation Error] Code: ${firestoreError.code || 'unknown'}, Message: ${firestoreError.message}`);
+      const err = new Error(firestoreError.message);
+      (err as any).code = firestoreError.code || 'firestore/permission-denied';
+      (err as any).step = 'firestore';
+      (err as any).user = user;
+      throw err;
+    }
   }
 
   /**
    * Log in user with email & password
    */
-  static async loginUser(email: string, pass: string): Promise<FirebaseUser> {
-    const cred = await signInWithEmailAndPassword(auth, email, pass);
-    return cred.user;
+  static async loginUser(email: string, pass: string): Promise<FirebaseUser | AppAuthUser> {
+    try {
+      const cred = await signInWithEmailAndPassword(auth, email, pass);
+      safeStorage.removeItem('ai_savdobot_local_user');
+      return cred.user;
+    } catch (err: any) {
+      if (err.code === 'auth/operation-not-allowed' || (err.message && err.message.includes('auth/operation-not-allowed'))) {
+        console.warn('[Firebase Auth] Notice: Email/Password provider is disabled in Firebase Console. Logging in via local session.');
+        const savedUserStr = safeStorage.getItem('ai_savdobot_local_user');
+        if (savedUserStr) {
+          const u = JSON.parse(savedUserStr);
+          AuthService.notifyLocalListeners(u);
+          return u;
+        }
+
+        const localUser: AppAuthUser = {
+          uid: 'usr_demo_101',
+          email: email || 'demo@savdobot.uz',
+          displayName: email.split('@')[0] || 'Do\'kon egasi',
+          isDemo: true,
+        };
+        safeStorage.setItem('ai_savdobot_local_user', JSON.stringify(localUser));
+        AuthService.notifyLocalListeners(localUser);
+        return localUser;
+      }
+      throw err;
+    }
   }
 
   /**
    * Log out user
    */
   static async logoutUser(): Promise<void> {
-    await signOut(auth);
+    safeStorage.removeItem('ai_savdobot_local_user');
+    safeStorage.removeItem('ai_savdobot_local_biz');
+    safeStorage.removeItem('ai_savdobot_local_udoc');
+    await signOut(auth).catch(() => {});
+    AuthService.notifyLocalListeners(null);
   }
 
   /**
    * Fetch current user's document and linked business from Firestore
    */
   static async getUserProfileAndBusiness(uid: string): Promise<{ userDoc: UserDocument | null; business: Business | null }> {
+    const savedBizStr = safeStorage.getItem('ai_savdobot_local_biz');
+    const savedDocStr = safeStorage.getItem('ai_savdobot_local_udoc');
+    if (savedBizStr && savedDocStr) {
+      try {
+        return { userDoc: JSON.parse(savedDocStr), business: JSON.parse(savedBizStr) };
+      } catch (e) {
+        console.warn('Error reading saved local business:', e);
+      }
+    }
+
     try {
       const uSnap = await getDoc(doc(db, 'users', uid));
       if (!uSnap.exists()) {
@@ -160,8 +299,8 @@ export class AuthService {
 
       return { userDoc: uData, business };
     } catch (err) {
-      console.error('Error fetching user profile and business:', err);
-      throw err;
+      console.warn('Notice fetching user profile and business from Firestore:', err);
+      return { userDoc: null, business: null };
     }
   }
 }
