@@ -4,6 +4,10 @@ import { GroundedContext } from '../../src/types/crm';
 export class AIResponder {
   private static getGeminiClient(): GoogleGenAI | null {
     const apiKey = process.env.GEMINI_API_KEY;
+    console.log('[DEBUG] AIResponder GEMINI_API_KEY check:', {
+      exists: !!apiKey,
+      length: apiKey?.length
+    });
     if (!apiKey) {
       return null;
     }

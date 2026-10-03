@@ -32,12 +32,13 @@ const TELEGRAM_WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET || '';
 const APP_URL = (process.env.APP_URL || '').replace(/\/$/, '');
 
 console.log('==================================================');
-console.log('[Telegram Bot Integration Diagnostic]');
-console.log('1. TELEGRAM_BOT_TOKEN set on server:', Boolean(TELEGRAM_BOT_TOKEN));
-console.log('2. TELEGRAM_WEBHOOK_SECRET set on server:', Boolean(TELEGRAM_WEBHOOK_SECRET));
-console.log('3. APP_URL:', APP_URL || '(None - Localhost)');
-console.log('4. Environment:', process.env.NODE_ENV || 'development');
-console.log('5. Firebase Project:', process.env.FIREBASE_PROJECT_ID || 'ai-savdobot');
+console.log('[Startup Diagnostic]');
+console.log('1. GEMINI_API_KEY check:', {
+  exists: !!process.env.GEMINI_API_KEY,
+  length: process.env.GEMINI_API_KEY?.length
+});
+console.log('2. NODE_ENV:', process.env.NODE_ENV);
+console.log('3. TELEGRAM_BOT_TOKEN set:', Boolean(TELEGRAM_BOT_TOKEN));
 console.log('==================================================');
 
 /**

@@ -231,6 +231,96 @@ export class AuthService {
   }
 
   /**
+   * Securely sign-in or register a Telegram Administrator silently
+   */
+  static async signAndSyncTelegramAdmin(tgUser: any): Promise<{ user: FirebaseUser; business: Business; userDoc: UserDocument }> {
+    const email = tgUser.username ? `${tgUser.username}@telegram.savdobot.uz` : `${tgUser.id}@telegram.savdobot.uz`;
+    const password = `tg_pass_secure_${tgUser.id}`;
+    const businessId = `biz_${tgUser.id}`;
+    const uid = `tg_${tgUser.id}`;
+    const now = Date.now();
+
+    // Try signing in
+    let user: FirebaseUser;
+    try {
+      const cred = await signInWithEmailAndPassword(auth, email, password);
+      user = cred.user;
+      console.log('[AuthService] Telegram admin signed in successfully via Firebase Auth:', user.uid);
+    } catch (err: any) {
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential' || err.code === 'auth/invalid-email' || err.code === 'auth/missing-password') {
+        // Automatically create account if not exists
+        console.log('[AuthService] User not found or invalid credential. Automatically creating Firebase account for Telegram admin...');
+        const cred = await createUserWithEmailAndPassword(auth, email, password);
+        user = cred.user;
+        const displayName = [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ') || 'Telegram Admin';
+        try {
+          await updateProfile(user, { displayName });
+        } catch {}
+      } else {
+        throw err;
+      }
+    }
+
+    // Prepare user doc and business doc
+    const userDoc: UserDocument = {
+      userId: user.uid,
+      businessId: businessId,
+      businessName: `${tgUser.first_name || 'Savdo'} Do'koni`,
+      email: user.email || email,
+      displayName: user.displayName || [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' '),
+      createdAt: now,
+    };
+
+    const businessDoc: Business = {
+      id: businessId,
+      userId: user.uid,
+      businessId: businessId,
+      name: userDoc.businessName,
+      ownerUid: user.uid,
+      phone: '',
+      address: 'Toshkent sh.',
+      workingHours: '09:00 - 20:00',
+      deliveryZones: ['Toshkent shahri'],
+      deliveryPrice: 20000,
+      freeDeliveryThreshold: 500000,
+      paymentMethods: ['Naqd pul', 'Click', 'Payme'],
+      currency: 'UZS',
+      defaultWarehouseId: `wh_${tgUser.id}`,
+      telegramConnected: true,
+      settings: {
+        autoReply: true,
+        groupAutoReply: false,
+        humanApprovalRequired: false,
+        followUp: true,
+      },
+      createdAt: now,
+    };
+
+    const defaultWarehouse: Warehouse = {
+      id: businessDoc.defaultWarehouseId!,
+      businessId: businessId,
+      name: 'Asosiy ombor',
+      address: 'Toshkent sh.',
+      active: true,
+      isDefault: true,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    // Save parent business document and default warehouse so security rules pass for all subcollections
+    try {
+      await setDoc(doc(db, 'users', user.uid), userDoc);
+      await setDoc(doc(db, 'businesses', businessId), businessDoc);
+      await setDoc(doc(db, 'businesses', businessId, 'warehouses', defaultWarehouse.id), defaultWarehouse);
+      console.log('[AuthService] Successfully synchronized parent business documents in Firestore.');
+    } catch (e) {
+      console.error('[AuthService] Failed to synchronize Firestore parent documents:', e);
+    }
+
+    return { user, business: businessDoc, userDoc };
+  }
+
+  /**
    * Log in user with email & password
    */
   static async loginUser(email: string, pass: string): Promise<FirebaseUser | AppAuthUser> {
@@ -328,6 +418,11 @@ export class FirestoreService {
   static async saveWarehouse(businessId: string, warehouse: Warehouse): Promise<void> {
     const docRef = doc(db, 'businesses', businessId, 'warehouses', warehouse.id);
     const now = Date.now();
+    console.log('[DEBUG] FirestoreService.saveWarehouse attempting write:', {
+      path: docRef.path,
+      businessId,
+      warehouseId: warehouse.id
+    });
     await setDoc(docRef, {
       ...warehouse,
       businessId,

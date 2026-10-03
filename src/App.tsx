@@ -121,52 +121,20 @@ export default function App() {
         }
         return res.json();
       })
-      .then((data) => {
+      .then(async (data) => {
         console.log('[Telegram Auth Passed] Server validated administrator access:', data);
         
-        const uid = `tg_${tgUser.id}`;
-        const email = tgUser.username ? `${tgUser.username}@telegram.savdobot.uz` : `${tgUser.id}@telegram.savdobot.uz`;
-        const displayName = [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ') || 'Telegram Admin';
-
+        // Sync Admin Profile to Firestore
+        const { user, business: syncedBiz, userDoc: syncedDoc } = await FirestoreService.signAndSyncTelegramAdmin(tgUser);
+        
         const localUser: AppAuthUser = {
-          uid,
-          email,
-          displayName,
+          uid: user.uid,
+          email: user.email || '',
+          displayName: user.displayName || '',
         };
 
-        const localBiz: Business = {
-          id: bizId,
-          userId: uid,
-          businessId: bizId,
-          name: `${tgUser.first_name || 'Savdo'} Do'koni`,
-          ownerUid: uid,
-          phone: '',
-          address: 'Toshkent sh.',
-          workingHours: '09:00 - 20:00',
-          deliveryZones: ['Toshkent shahri'],
-          deliveryPrice: 20000,
-          freeDeliveryThreshold: 500000,
-          paymentMethods: ['Naqd pul', 'Click', 'Payme'],
-          currency: 'UZS',
-          defaultWarehouseId: `wh_${tgUser.id}`,
-          telegramConnected: true,
-          settings: {
-            autoReply: true,
-            groupAutoReply: false,
-            humanApprovalRequired: false,
-            followUp: true,
-          },
-          createdAt: Date.now(),
-        };
-
-        const localUserDoc = {
-          userId: uid,
-          businessId: bizId,
-          businessName: localBiz.name,
-          email,
-          displayName,
-          createdAt: Date.now(),
-        };
+        const localBiz = syncedBiz;
+        const localUserDoc = syncedDoc;
 
         try {
           localStorage.setItem('ai_savdobot_local_user', JSON.stringify(localUser));
@@ -180,13 +148,18 @@ export default function App() {
         setBusiness(localBiz);
         setUserDoc(localUserDoc);
         
-        // Seed default template data for the verified admin workspace
-        setWarehouses(INITIAL_WAREHOUSES.map(w => ({ ...w, businessId: bizId })));
-        setProducts(INITIAL_PRODUCTS.map(p => ({ ...p, businessId: bizId })));
-        setCustomers(INITIAL_CUSTOMERS.map(c => ({ ...c, businessId: bizId })));
-        setOrders(INITIAL_ORDERS.map(o => ({ ...o, businessId: bizId })));
-        setMovements(INITIAL_STOCK_MOVEMENTS.map(m => ({ ...m, businessId: bizId })));
-        setFollowups(INITIAL_FOLLOWUPS);
+        // Load actual data from Firestore
+        const warehouses = await FirestoreService.getWarehouses(localBiz.id);
+        setWarehouses(warehouses);
+        
+        const products = await FirestoreService.getProducts(localBiz.id);
+        setProducts(products);
+
+        const customers = await CustomerService.getCustomers(localBiz.id);
+        setCustomers(customers);
+
+        const orders = await OrderService.getOrders(localBiz.id);
+        setOrders(orders);
 
         setCurrentTab('dashboard');
         setCurrentPath('/dashboard');
@@ -291,7 +264,10 @@ export default function App() {
 
   // Handlers for Warehouses
   const handleCreateWarehouse = async (data: { name: string; address: string }) => {
+    console.log('[4] FORM_SUBMIT', data);
     const bizId = business?.id || 'biz-default';
+    console.log('[3] BUSINESS_ID', bizId);
+    
     const now = Date.now();
     const newWh: Warehouse = {
       id: `wh_${now}_${Math.random().toString(36).substring(2, 6)}`,
@@ -305,14 +281,24 @@ export default function App() {
 
     // Optimistically update the UI state immediately so the user sees it instantly
     setWarehouses((prev) => {
+      console.log('[7] STATE_UPDATE');
       const exists = prev.some(w => w.id === newWh.id);
       if (exists) return prev;
       return [newWh, ...prev];
     });
 
     try {
+      console.log('[5] SAVE_WAREHOUSE_START', { warehouseId: newWh.id, bizId });
       await FirestoreService.saveWarehouse(bizId, newWh);
-    } catch (err) {
+      console.log('[6] FIRESTORE_WRITE_SUCCESS');
+    } catch (err: any) {
+      console.error('[6] FIRESTORE_WRITE_ERROR', {
+        code: err.code,
+        message: err.message,
+        bizId,
+        uid: currentUser?.uid,
+        warehouseId: newWh.id
+      });
       console.warn('[Offline Warning] Could not save warehouse to Firestore backend:', err);
     }
   };

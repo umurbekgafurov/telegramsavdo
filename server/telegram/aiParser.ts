@@ -4,6 +4,10 @@ import { AIParserIntent, AIParserResult } from '../../src/types/crm';
 export class AIParser {
   private static getGeminiClient(): GoogleGenAI | null {
     const apiKey = process.env.GEMINI_API_KEY;
+    console.log('[DEBUG] AIParser GEMINI_API_KEY check:', {
+      exists: !!apiKey,
+      length: apiKey?.length
+    });
     if (!apiKey) {
       return null;
     }
@@ -42,7 +46,7 @@ export class AIParser {
     if (ai) {
       try {
         const response = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
+          model: 'gemini-flash-latest',
           contents: `Siz O'zbekistondagi chakana savdo Telegram boti uchun xabarlarni tahlil qiluvchi AI Parsersiz.
 Mijoz xabarini quyidagi 6 ta qat'iy intentdan biriga ajrating:
 1. "product_query": Mahsulot qidirish, modellari, ranglari, funksiyalari, xususiyatlari yoki katalogi haqida so'rash.
