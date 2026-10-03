@@ -55,6 +55,8 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<FirebaseUser | AppAuthUser | null>(null);
   const [userDoc, setUserDoc] = useState<UserDocument | null>(null);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
+  const [isTelegramNonAdmin, setIsTelegramNonAdmin] = useState(false);
+  const [nonAdminName, setNonAdminName] = useState('');
 
   // Path routing: supports '/', '/login', '/register', '/dashboard', '/warehouses', '/products', '/products/new', '/products/:id'
   const [currentPath, setCurrentPath] = useState<string>(() => {
@@ -95,6 +97,108 @@ export default function App() {
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // 0. Telegram WebApp Auto-login & Secure Admin Access Control Verification
+  useEffect(() => {
+    const tg = (window as any).Telegram?.WebApp;
+    if (tg && tg.initData && tg.initDataUnsafe && tg.initDataUnsafe.user) {
+      const tgUser = tg.initDataUnsafe.user;
+      const bizId = `biz_${tgUser.id}`;
+
+      setIsAuthChecking(true);
+      
+      // Perform cryptographic server-side validation & Telegram group administrator checking
+      fetch('/api/telegram/validate-admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ initData: tg.initData, businessId: bizId })
+      })
+      .then(async (res) => {
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || 'Server validation failed');
+        }
+        return res.json();
+      })
+      .then((data) => {
+        console.log('[Telegram Auth Passed] Server validated administrator access:', data);
+        
+        const uid = `tg_${tgUser.id}`;
+        const email = tgUser.username ? `${tgUser.username}@telegram.savdobot.uz` : `${tgUser.id}@telegram.savdobot.uz`;
+        const displayName = [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ') || 'Telegram Admin';
+
+        const localUser: AppAuthUser = {
+          uid,
+          email,
+          displayName,
+        };
+
+        const localBiz: Business = {
+          id: bizId,
+          userId: uid,
+          businessId: bizId,
+          name: `${tgUser.first_name || 'Savdo'} Do'koni`,
+          ownerUid: uid,
+          phone: '',
+          address: 'Toshkent sh.',
+          workingHours: '09:00 - 20:00',
+          deliveryZones: ['Toshkent shahri'],
+          deliveryPrice: 20000,
+          freeDeliveryThreshold: 500000,
+          paymentMethods: ['Naqd pul', 'Click', 'Payme'],
+          currency: 'UZS',
+          defaultWarehouseId: `wh_${tgUser.id}`,
+          telegramConnected: true,
+          settings: {
+            autoReply: true,
+            groupAutoReply: false,
+            humanApprovalRequired: false,
+            followUp: true,
+          },
+          createdAt: Date.now(),
+        };
+
+        const localUserDoc = {
+          userId: uid,
+          businessId: bizId,
+          businessName: localBiz.name,
+          email,
+          displayName,
+          createdAt: Date.now(),
+        };
+
+        try {
+          localStorage.setItem('ai_savdobot_local_user', JSON.stringify(localUser));
+          localStorage.setItem('ai_savdobot_local_biz', JSON.stringify(localBiz));
+          localStorage.setItem('ai_savdobot_local_udoc', JSON.stringify(localUserDoc));
+        } catch (e) {
+          console.warn('Storage disabled or unavailable:', e);
+        }
+
+        setCurrentUser(localUser);
+        setBusiness(localBiz);
+        setUserDoc(localUserDoc);
+        
+        // Seed default template data for the verified admin workspace
+        setWarehouses(INITIAL_WAREHOUSES.map(w => ({ ...w, businessId: bizId })));
+        setProducts(INITIAL_PRODUCTS.map(p => ({ ...p, businessId: bizId })));
+        setCustomers(INITIAL_CUSTOMERS.map(c => ({ ...c, businessId: bizId })));
+        setOrders(INITIAL_ORDERS.map(o => ({ ...o, businessId: bizId })));
+        setMovements(INITIAL_STOCK_MOVEMENTS.map(m => ({ ...m, businessId: bizId })));
+        setFollowups(INITIAL_FOLLOWUPS);
+
+        setCurrentTab('dashboard');
+        setCurrentPath('/dashboard');
+        setIsAuthChecking(false);
+      })
+      .catch((err) => {
+        console.error('[Telegram Auth Error] Rejected:', err.message);
+        setIsTelegramNonAdmin(true);
+        setNonAdminName(tgUser.first_name || 'Telegram Foydalanuvchi');
+        setIsAuthChecking(false);
+      });
+    }
   }, []);
 
   // 1. Firebase Auth state listener with persistence
@@ -187,45 +291,55 @@ export default function App() {
 
   // Handlers for Warehouses
   const handleCreateWarehouse = async (data: { name: string; address: string }) => {
-    if (!business) return;
+    const bizId = business?.id || 'biz-default';
     const now = Date.now();
     const newWh: Warehouse = {
       id: `wh_${now}_${Math.random().toString(36).substring(2, 6)}`,
-      businessId: business.id,
+      businessId: bizId,
       name: data.name,
       address: data.address,
       active: true,
       createdAt: now,
       updatedAt: now,
     };
+
+    // Optimistically update the UI state immediately so the user sees it instantly
+    setWarehouses((prev) => {
+      const exists = prev.some(w => w.id === newWh.id);
+      if (exists) return prev;
+      return [newWh, ...prev];
+    });
+
     try {
-      await FirestoreService.saveWarehouse(business.id, newWh);
-      const updated = await FirestoreService.getWarehouses(business.id);
-      setWarehouses(updated);
-    } catch {
-      setWarehouses((prev) => [newWh, ...prev]);
+      await FirestoreService.saveWarehouse(bizId, newWh);
+    } catch (err) {
+      console.warn('[Offline Warning] Could not save warehouse to Firestore backend:', err);
     }
   };
 
   const handleUpdateWarehouse = async (warehouse: Warehouse) => {
-    if (!business) return;
+    const bizId = business?.id || warehouse.businessId || 'biz-default';
+
+    // Optimistically update state
+    setWarehouses((prev) => prev.map((w) => (w.id === warehouse.id ? warehouse : w)));
+
     try {
-      await FirestoreService.saveWarehouse(business.id, warehouse);
-      const updated = await FirestoreService.getWarehouses(business.id);
-      setWarehouses(updated);
-    } catch {
-      setWarehouses((prev) => prev.map((w) => (w.id === warehouse.id ? warehouse : w)));
+      await FirestoreService.saveWarehouse(bizId, warehouse);
+    } catch (err) {
+      console.warn('[Offline Warning] Could not update warehouse on Firestore backend:', err);
     }
   };
 
   const handleDeleteWarehouse = async (warehouseId: string) => {
-    if (!business) return;
+    const bizId = business?.id || 'biz-default';
+
+    // Optimistically update state
+    setWarehouses((prev) => prev.filter((w) => w.id !== warehouseId));
+
     try {
-      await FirestoreService.deleteWarehouse(business.id, warehouseId);
-      const updated = await FirestoreService.getWarehouses(business.id);
-      setWarehouses(updated);
-    } catch {
-      setWarehouses((prev) => prev.filter((w) => w.id !== warehouseId));
+      await FirestoreService.deleteWarehouse(bizId, warehouseId);
+    } catch (err) {
+      console.warn('[Offline Warning] Could not delete warehouse on Firestore backend:', err);
     }
   };
 
@@ -374,6 +488,26 @@ export default function App() {
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center gap-3">
         <div className="w-10 h-10 border-3 border-sky-500 border-t-transparent rounded-full animate-spin"></div>
         <p className="text-xs text-slate-500 font-medium">Firebase ulanishi tekshirilmoqda...</p>
+      </div>
+    );
+  }
+
+  // Telegram Non-Admin Access Control Block
+  if (isTelegramNonAdmin) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
+        <div className="w-16 h-16 bg-rose-50 text-rose-600 rounded-full flex items-center justify-center mb-4 border border-rose-100 shadow-sm animate-bounce">
+          ⚠️
+        </div>
+        <h1 className="text-lg font-bold text-slate-900 leading-tight">Ruxsat Etilmadi</h1>
+        <p className="text-xs text-slate-500 mt-2 max-w-sm">
+          Hurmatli <strong>{nonAdminName}</strong>! Siz ushbu do'konning administrator emassiz.
+          Admin Dashboard faqat ro'yxatdan o'tgan do'kon egalari uchun ochiq.
+        </p>
+        <div className="mt-6 w-full max-w-xs p-4 bg-white rounded-2xl border border-slate-200 text-[11px] text-slate-500 space-y-2">
+          <div className="font-bold text-slate-700">Mijozlar uchun:</div>
+          <div>Barcha xizmatlar va buyurtmalar bevosita Telegram bot suhbati orqali amalga oshiriladi. Botga qaytib, buyurtma berishingiz mumkin.</div>
+        </div>
       </div>
     );
   }
@@ -546,6 +680,9 @@ export default function App() {
                   onCreateWarehouse={handleCreateWarehouse}
                   onUpdateWarehouse={handleUpdateWarehouse}
                   onDeleteWarehouse={handleDeleteWarehouse}
+                  movements={movements}
+                  onAddStockMovement={handleAddStockMovement}
+                  businessId={business?.id}
                 />
               )}
 

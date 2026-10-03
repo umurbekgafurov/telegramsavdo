@@ -373,3 +373,37 @@ Mijozga do'stona, o'zbek tilida, xushmuomala va professional sotuvchi sifatida j
 Siz so'ragan taklif bo'yicha menejerimiz bilan kelishdik. 2 dona xarid qilsangiz, har biriga maxsus qulay chegirma va bepul yetkazib berish xizmatini taqdim etamiz. 
 Buyurtmani rasmiylashtirish uchun telefon raqamingizni qoldirishingiz mumkinmi?`;
 }
+
+/**
+ * 6. Generate Marketing Campaign response draft based on customer segment cohort context (M9.4)
+ */
+export async function generateCampaignDraft(
+  segmentLabel: string,
+  businessName: string,
+  promoTheme?: string
+): Promise<string> {
+  const themeText = promoTheme ? `Aksiya mavzusi: "${promoTheme}"` : "Do'konning yangi chegirma va maxsus takliflari";
+  try {
+    const ai = getGeminiClient();
+    if (ai) {
+      const prompt = `Siz "${businessName}" do'koni ma'murisiz.
+Do'kondagi muayyan guruhdagi mijozlar (${segmentLabel}) uchun yangi reklama va aksiya xabari qoralamasini tayyorlang.
+${themeText}
+
+Xabar do'stona, qiziqarli, o'zbek tilida (lotin alifbosida), professional va sotuvlarni oshirishga qaratilgan bo'lsin. Mijozlarni darhol bot orqali buyurtma berishga chorlasin.`;
+      const res = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt
+      });
+      if (res.text) return res.text.trim();
+    }
+  } catch (e) {
+    console.warn('Campaign draft gen fallback:', e);
+  }
+
+  return `🎉 HURMATLI MIJOZLAR! 🎉
+
+Sizlar uchun maxsus taklifimiz bor! Do'konimizda barcha turdagi mahsulotlarimizga 15% gacha qulay chegirmalar e'lon qilamiz. 
+
+Ushbu aksiya aynan doimiy va bizni kuzatib kelayotgan do'stlarimiz uchun amal qiladi! Hoziroq guruhimizdagi katalog orqali buyurtma bering va bepul yetkazib berish xizmatidan bahramand bo'ling! 🚚`;
+}

@@ -1,0 +1,10 @@
+{
+  "type": "service_account",
+  "project_id": "ai-savdobot",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDJfRi8Il6MQvBX\nsJlO4+R+hB3w/3ehCNqxaenAe+ZOY9VvdZLb/l41f2HNXtxl0+2HW23hUF3qVzo2\n6iyKEE4",
+  "client_email": "firebase-adminsdk-fbsvc@ai-savdobot.iam.gserviceaccount.com",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-fbsvc%40ai-savdobot.iam.gserviceaccount.com"
+}

@@ -20,6 +20,7 @@ interface WarehouseViewProps {
   movements: StockMovement[];
   onAddStockMovement: (movement: StockMovement) => Promise<void>;
   onAddWarehouse: (warehouse: Warehouse) => Promise<void>;
+  businessId?: string;
 }
 
 export const WarehouseView: React.FC<WarehouseViewProps> = ({
@@ -28,6 +29,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   movements,
   onAddStockMovement,
   onAddWarehouse,
+  businessId,
 }) => {
   const [activeTab, setActiveTab] = useState<'products' | 'movements' | 'reports'>('products');
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<string>(warehouses[0]?.id || 'wh-main');
@@ -45,6 +47,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   const [isNewWarehouseModalOpen, setIsNewWarehouseModalOpen] = useState(false);
   const [whName, setWhName] = useState('');
   const [whAddress, setWhAddress] = useState('');
+  const [whError, setWhError] = useState<string | null>(null);
 
   const currentWarehouse = warehouses.find(w => w.id === selectedWarehouseId) || warehouses[0];
   const warehouseProducts = products.filter(p => p.warehouseId === selectedWarehouseId);
@@ -60,7 +63,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
 
     const movement: StockMovement = {
       id: `sm-${Date.now()}`,
-      businessId: 'biz-default',
+      businessId: businessId || 'biz-default',
       warehouseId: selectedWarehouseId,
       productId: prod.id,
       productName: prod.name,
@@ -78,18 +81,27 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   const handleCreateWarehouse = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!whName) return;
+    setWhError(null);
+
+    const bizId = businessId || 'biz-default';
     const newWh: Warehouse = {
       id: `wh-${Date.now()}`,
-      businessId: 'biz-default',
+      businessId: bizId,
       name: whName,
       address: whAddress,
       active: true,
       createdAt: Date.now(),
     };
-    await onAddWarehouse(newWh);
-    setIsNewWarehouseModalOpen(false);
-    setWhName('');
-    setWhAddress('');
+
+    try {
+      await onAddWarehouse(newWh);
+      setIsNewWarehouseModalOpen(false);
+      setWhName('');
+      setWhAddress('');
+    } catch (err: any) {
+      console.error('Error creating warehouse inside WarehouseView:', err);
+      setWhError(err.message || 'Yangi omborni saqlashda xatolik yuz berdi.');
+    }
   };
 
   return (
@@ -435,6 +447,11 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
               <button onClick={() => setIsNewWarehouseModalOpen(false)} className="text-slate-400 hover:text-slate-600">✕</button>
             </div>
             <form onSubmit={handleCreateWarehouse} className="my-4 space-y-3 text-xs">
+              {whError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold rounded-xl">
+                  ⚠️ {whError}
+                </div>
+              )}
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">Ombor nomi *</label>
                 <input

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Boxes,
   Plus,
@@ -12,16 +12,22 @@ import {
   CheckCircle2,
   Package,
   Layers,
-  Camera
+  Camera,
+  ArrowDownLeft,
+  ArrowUpRight,
+  History,
+  Settings
 } from 'lucide-react';
-import { Product, Warehouse } from '../types';
+import { Product, Warehouse, StockMovement } from '../types';
 import { parseProductFromText } from '../services/aiService';
+import { FirestoreService } from '../services/firebaseService';
 
 interface ProductsViewProps {
   products: Product[];
   warehouses: Warehouse[];
   onSaveProduct: (product: Product) => Promise<void>;
   onDeleteProduct: (id: string) => Promise<void>;
+  businessId?: string;
 }
 
 export const ProductsView: React.FC<ProductsViewProps> = ({
@@ -29,9 +35,96 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
   warehouses,
   onSaveProduct,
   onDeleteProduct,
+  businessId,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
+
+  // M10.4 Stock Ledger and Low Stock Alert states
+  const [activeView, setActiveView] = useState<'catalog' | 'ledger'>('catalog');
+  const [movements, setMovements] = useState<StockMovement[]>([]);
+  const [loadingMovements, setLoadingMovements] = useState(false);
+  const [ledgerFilter, setLedgerFilter] = useState<'All' | 'STOCK_IN' | 'STOCK_OUT'>('All');
+  const [ledgerSearch, setLedgerSearch] = useState('');
+
+  // Manual Stock Adjustment popup form state
+  const [isAdjustmentModalOpen, setIsAdjustmentModalOpen] = useState(false);
+  const [adjustProductId, setAdjustProductId] = useState('');
+  const [adjustType, setAdjustType] = useState<'STOCK_IN' | 'STOCK_OUT'>('STOCK_IN');
+  const [adjustQuantity, setAdjustQuantity] = useState<number>(1);
+  const [adjustReason, setAdjustReason] = useState('');
+  const [adjustError, setAdjustError] = useState<string | null>(null);
+  const [adjustSubmitting, setAdjustSubmitting] = useState(false);
+
+  const loadLedger = async () => {
+    setLoadingMovements(true);
+    try {
+      const bizId = businessId || 'biz-default';
+      const list = await FirestoreService.getStockMovements(bizId);
+      setMovements(list);
+    } catch (err) {
+      console.error('Failed to load ledger:', err);
+    } finally {
+      setLoadingMovements(false);
+    }
+  };
+
+  const handleConfirmAdjustment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!adjustProductId) {
+      setAdjustError('Mahsulotni tanlang');
+      return;
+    }
+    if (adjustQuantity <= 0) {
+      setAdjustError('Miqdor 1 dan kam bo\'lmasligi lozim');
+      return;
+    }
+
+    const selectedProd = products.find(p => p.id === adjustProductId);
+    if (!selectedProd) {
+      setAdjustError('Mahsulot topilmadi');
+      return;
+    }
+
+    if (adjustType === 'STOCK_OUT' && adjustQuantity > selectedProd.stock) {
+      setAdjustError(`Omborda yetarli qoldiq mavjud emas! Maksimal chiqim miqdori: ${selectedProd.stock} dona.`);
+      return;
+    }
+
+    setAdjustSubmitting(true);
+    setAdjustError(null);
+
+    try {
+      const delta = adjustType === 'STOCK_IN' ? adjustQuantity : -adjustQuantity;
+      const bizId = businessId || 'biz-default';
+      await FirestoreService.addStockMovement(bizId, {
+        warehouseId: selectedProd.warehouseId || warehouses[0]?.id || 'wh-main',
+        productId: adjustProductId,
+        productName: selectedProd.name,
+        type: adjustType,
+        quantity: delta,
+        reason: adjustReason.trim() || (adjustType === 'STOCK_IN' ? 'Qo\'shimcha kirim' : 'Chiqim / Kamayish'),
+        createdBy: 'Admin',
+      });
+
+      setIsAdjustmentModalOpen(false);
+      setAdjustProductId('');
+      setAdjustQuantity(1);
+      setAdjustReason('');
+
+      await loadLedger();
+      await onSaveProduct({
+        ...selectedProd,
+        stock: selectedProd.stock + delta,
+        updatedAt: Date.now()
+      });
+    } catch (err: any) {
+      console.error('[Adjustment Submit Error]', err);
+      setAdjustError(err.message || 'Kirim-chiqimni yozishda xatolik yuz berdi.');
+    } finally {
+      setAdjustSubmitting(false);
+    }
+  };
   
   // Modals state
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -142,7 +235,53 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Header with Title and Action Buttons */}
+      {/* M10.4 View Tabs */}
+      <div className="flex border-b border-slate-200 bg-white px-5 rounded-2xl border border-slate-200/80 shadow-xs py-2 items-center justify-between gap-4">
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setActiveView('catalog')}
+            className={`px-4 py-2 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
+              activeView === 'catalog'
+                ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-2xs'
+                : 'text-slate-500 hover:bg-slate-50 border border-transparent'
+            }`}
+          >
+            <Boxes className="w-4 h-4" />
+            Mahsulotlar Katalogi
+          </button>
+          <button
+            onClick={() => {
+              setActiveView('ledger');
+              loadLedger();
+            }}
+            className={`px-4 py-2 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
+              activeView === 'ledger'
+                ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-2xs'
+                : 'text-slate-500 hover:bg-slate-50 border border-transparent'
+            }`}
+          >
+            <History className="w-4 h-4" />
+            Ombor Jurnali (Stock Ledger)
+          </button>
+        </div>
+
+        {activeView === 'ledger' && (
+          <button
+            onClick={() => {
+              setAdjustError(null);
+              setIsAdjustmentModalOpen(true);
+            }}
+            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition-all cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Kirim / Chiqim qilish
+          </button>
+        )}
+      </div>
+
+      {activeView === 'catalog' ? (
+        <>
+          {/* Header with Title and Action Buttons */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
         <div>
           <h2 className="text-xl font-bold text-slate-900 tracking-tight">Mahsulotlar Katalogi</h2>
@@ -333,6 +472,165 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
           </table>
         </div>
       </div>
+      </>
+      ) : (
+        <div className="space-y-4">
+          {/* Ledger Header & Stats Card */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="p-4 bg-white rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-4">
+              <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
+                <History className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="text-[10px] uppercase font-bold text-slate-400">Jami harakatlar</div>
+                <div className="text-xl font-bold text-slate-900">{movements.length} ta</div>
+              </div>
+            </div>
+
+            <div className="p-4 bg-white rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-4">
+              <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
+                <ArrowUpRight className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="text-[10px] uppercase font-bold text-slate-400">Kirimlar (Inbound)</div>
+                <div className="text-xl font-bold text-slate-900">
+                  {movements.filter(m => m.type === 'STOCK_IN').length} ta
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4 bg-white rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-4">
+              <div className="p-3 bg-amber-50 text-amber-600 rounded-xl">
+                <ArrowDownLeft className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="text-[10px] uppercase font-bold text-slate-400">Chiqimlar (Outbound)</div>
+                <div className="text-xl font-bold text-slate-900">
+                  {movements.filter(m => m.type === 'STOCK_OUT').length} ta
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Ledger Filter and Search Bar */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs">
+            <div className="relative w-full sm:w-80">
+              <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Mahsulot nomi yoki sababi bo'yicha..."
+                value={ledgerSearch}
+                onChange={(e) => setLedgerSearch(e.target.value)}
+                className="w-full pl-9 pr-4 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+              />
+            </div>
+
+            <div className="flex items-center gap-1 overflow-x-auto w-full sm:w-auto">
+              <button
+                onClick={() => setLedgerFilter('All')}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-xl transition-all ${
+                  ledgerFilter === 'All'
+                    ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-2xs'
+                    : 'text-slate-600 hover:bg-slate-50 border border-transparent'
+                }`}
+              >
+                Barchasi
+              </button>
+              <button
+                onClick={() => setLedgerFilter('STOCK_IN')}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-xl transition-all ${
+                  ledgerFilter === 'STOCK_IN'
+                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs'
+                    : 'text-slate-600 hover:bg-slate-50 border border-transparent'
+                }`}
+              >
+                Faqat Kirim
+              </button>
+              <button
+                onClick={() => setLedgerFilter('STOCK_OUT')}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-xl transition-all ${
+                  ledgerFilter === 'STOCK_OUT'
+                    ? 'bg-amber-50 text-amber-700 border border-amber-200 shadow-2xs'
+                    : 'text-slate-600 hover:bg-slate-50 border border-transparent'
+                }`}
+              >
+                Faqat Chiqim
+              </button>
+            </div>
+          </div>
+
+          {/* Movements Table */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+            {loadingMovements ? (
+              <div className="py-12 text-center text-slate-400 text-xs flex flex-col items-center justify-center gap-2">
+                <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+                <span>Yuklanmoqda...</span>
+              </div>
+            ) : movements.length === 0 ? (
+              <div className="py-16 text-center text-slate-400 text-xs font-medium space-y-2">
+                <History className="w-10 h-10 mx-auto text-slate-300 stroke-1" />
+                <div>Harakatlar jurnali bo'sh. Birinchi kirim/chiqim amalini bajaring.</div>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-100 bg-slate-50/50 text-slate-400 uppercase font-semibold">
+                      <th className="py-3.5 pl-4">Harakat Turi</th>
+                      <th className="py-3.5">Mahsulot</th>
+                      <th className="py-3.5">Miqdor (Dona)</th>
+                      <th className="py-3.5">Sabab / Izoh</th>
+                      <th className="py-3.5">Mas'ul</th>
+                      <th className="py-3.5 pr-4 text-right">Sana</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {movements
+                      .filter(m => {
+                        const matchesSearch = (m.productName || '').toLowerCase().includes(ledgerSearch.toLowerCase()) || (m.reason || '').toLowerCase().includes(ledgerSearch.toLowerCase());
+                        const matchesType = ledgerFilter === 'All' || m.type === ledgerFilter;
+                        return matchesSearch && matchesType;
+                      })
+                      .map((m) => {
+                        const isKirim = m.type === 'STOCK_IN';
+                        return (
+                          <tr key={m.id} className="hover:bg-slate-50/80 transition-colors">
+                            <td className="py-3.5 pl-4">
+                              <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${
+                                isKirim
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-100 animate-pulse'
+                                  : 'bg-amber-50 text-amber-700 border-amber-100'
+                              }`}>
+                                {isKirim ? (
+                                  <>
+                                    <ArrowUpRight className="w-3 h-3 text-emerald-600" />
+                                    Kirim (Inbound)
+                                  </>
+                                ) : (
+                                  <>
+                                    <ArrowDownLeft className="w-3 h-3 text-amber-600" />
+                                    Chiqim (Outbound)
+                                  </>
+                                )}
+                              </span>
+                            </td>
+                            <td className="py-3.5 font-bold text-slate-900">{m.productName || 'Noma\'lum'}</td>
+                            <td className="py-3.5 font-bold text-slate-700">{Math.abs(m.quantity)} dona</td>
+                            <td className="py-3.5 text-slate-500 font-medium">{m.reason || '-'}</td>
+                            <td className="py-3.5 text-slate-500 font-semibold">{m.createdBy || 'Tizim'}</td>
+                            <td className="py-3.5 pr-4 text-right text-slate-400 font-medium">
+                              {new Date(m.createdAt).toLocaleString('uz-UZ')}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* AI ADD PRODUCT MODAL (Section 8 of Brief) */}
       {isAIAddModalOpen && (
@@ -685,6 +983,135 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
               </div>
             </form>
           </div>
+        </div>
+      )}
+
+      {/* Manual Stock Adjustment Modal (M10.4) */}
+      {isAdjustmentModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-fadeIn">
+          <form onSubmit={handleConfirmAdjustment} className="w-full max-w-md bg-white rounded-2xl p-6 shadow-xl border border-slate-200/80 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <History className="w-5 h-5 text-indigo-600" />
+                <h3 className="font-bold text-slate-900 text-sm tracking-tight">Kirim / Chiqim Amali</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAdjustmentModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 text-xs font-semibold"
+              >
+                ✕
+              </button>
+            </div>
+
+            {adjustError && (
+              <div className="p-3.5 bg-rose-50 border border-rose-100 text-rose-900 text-xs font-semibold rounded-xl">
+                ⚠️ {adjustError}
+              </div>
+            )}
+
+            {/* Product Selection */}
+            <div className="space-y-1 text-xs">
+              <label className="block font-semibold text-slate-700">Mahsulotni tanlang:</label>
+              <select
+                value={adjustProductId}
+                onChange={(e) => {
+                  setAdjustProductId(e.target.value);
+                  setAdjustError(null);
+                }}
+                className="w-full p-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium text-slate-700"
+                required
+              >
+                <option value="">-- Tanlang --</option>
+                {products.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} (Qoldiq: {p.stock} dona)
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Movement Type */}
+            <div className="space-y-1 text-xs">
+              <label className="block font-semibold text-slate-700">Amal turi:</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAdjustType('STOCK_IN')}
+                  className={`py-2 text-xs font-bold rounded-xl border transition-all ${
+                    adjustType === 'STOCK_IN'
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200 shadow-2xs'
+                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  📥 Kirim (STOCK_IN)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAdjustType('STOCK_OUT')}
+                  className={`py-2 text-xs font-bold rounded-xl border transition-all ${
+                    adjustType === 'STOCK_OUT'
+                      ? 'bg-amber-50 text-amber-700 border-amber-200 shadow-2xs'
+                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  📤 Chiqim (STOCK_OUT)
+                </button>
+              </div>
+            </div>
+
+            {/* Quantity */}
+            <div className="space-y-1 text-xs">
+              <label className="block font-semibold text-slate-700">Miqdor (Dona):</label>
+              <input
+                type="number"
+                min="1"
+                value={adjustQuantity}
+                onChange={(e) => {
+                  setAdjustQuantity(Math.max(1, Number(e.target.value)));
+                  setAdjustError(null);
+                }}
+                className="w-full p-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                required
+              />
+            </div>
+
+            {/* Reason/Note */}
+            <div className="space-y-1 text-xs">
+              <label className="block font-semibold text-slate-700">Sabab / Izoh:</label>
+              <textarea
+                rows={3}
+                placeholder="Masalan: Yangi partiya kirimi, Yaroqsiz tovar..."
+                value={adjustReason}
+                onChange={(e) => setAdjustReason(e.target.value)}
+                className="w-full p-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 leading-relaxed font-sans"
+              />
+            </div>
+
+            {/* Footer buttons */}
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 text-xs">
+              <button
+                type="button"
+                disabled={adjustSubmitting}
+                onClick={() => setIsAdjustmentModalOpen(false)}
+                className="px-4 py-2 font-semibold text-slate-600 hover:bg-slate-50 border border-slate-100 rounded-xl"
+              >
+                Bekor qilish
+              </button>
+
+              <button
+                type="submit"
+                disabled={adjustSubmitting}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-xs transition-all flex items-center gap-1.5"
+              >
+                {adjustSubmitting ? (
+                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                ) : (
+                  <span>Tasdiqlash</span>
+                )}
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>

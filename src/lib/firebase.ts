@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore } from 'firebase/firestore';
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, memoryLocalCache } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import configJson from '../../firebase-applet-config.json';
 
@@ -24,10 +24,29 @@ console.log('====================================');
 // Initialize Firebase App
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
-// Initialize Firestore with specific database ID from config
-export const db = configJson.firestoreDatabaseId
-  ? getFirestore(app, configJson.firestoreDatabaseId)
-  : getFirestore(app);
+// Safe check for LocalStorage availability inside sandboxed preview environments
+const checkLocalStorageSupported = (): boolean => {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return false;
+    const testKey = '__firestore_storage_test__';
+    window.localStorage.setItem(testKey, testKey);
+    window.localStorage.removeItem(testKey);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const cacheConfig = checkLocalStorageSupported()
+  ? persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+  : memoryLocalCache();
+
+console.log('[Firestore Cache Mode]:', checkLocalStorageSupported() ? 'Persistent (IndexedDB)' : 'Memory-Only Fallback');
+
+// Initialize Firestore with specific database ID and robust offline caching policy
+export const db = initializeFirestore(app, {
+  localCache: cacheConfig,
+});
 
 // Initialize Auth
 export const auth = getAuth(app);

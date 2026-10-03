@@ -3,6 +3,9 @@ import type { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
+import { collection, query, limit, getDocs } from 'firebase/firestore';
+import { db } from './src/lib/firebase';
 import { WebhookSecurity } from './server/telegram/webhookSecurity';
 import { UpdateProcessor } from './server/telegram/updateProcessor';
 import { TelegramClient } from './server/telegram/telegramClient';
@@ -185,6 +188,121 @@ app.get('/api/telegram/status', async (_req: Request, res: Response) => {
 app.post('/api/telegram/enable-polling', async (_req: Request, res: Response) => {
   startPollingWorker();
   res.json({ ok: true, isPollingActive: true });
+});
+
+// Telegram Mini App Admin Access Control Verification endpoint
+app.post('/api/telegram/validate-admin', async (req: Request, res: Response) => {
+  const { initData, businessId } = req.body;
+  if (!initData || !businessId) {
+    return res.status(400).json({ ok: false, error: 'initData and businessId are required' });
+  }
+
+  // 1. Parse query parameters
+  const params = new URLSearchParams(initData);
+  const hash = params.get('hash');
+  let user: any = null;
+  const userStr = params.get('user');
+  if (userStr) {
+    try {
+      user = JSON.parse(userStr);
+    } catch {}
+  }
+
+  if (!hash || !user) {
+    return res.status(401).json({ ok: false, error: 'Invalid or empty Telegram credentials' });
+  }
+
+  // HMAC SHA256 Verification if bot token is present
+  if (TELEGRAM_BOT_TOKEN) {
+    try {
+      const keys = Array.from(params.keys())
+        .filter((k) => k !== 'hash')
+        .sort();
+      const dataCheckString = keys.map((k) => `${k}=${params.get(k)}`).join('\n');
+      const secretKey = crypto.createHmac('sha256', 'WebAppData').update(TELEGRAM_BOT_TOKEN).digest();
+      const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+      if (calculatedHash !== hash) {
+        return res.status(403).json({ ok: false, error: 'Telegram authenticity hash verification failed.' });
+      }
+    } catch (err: any) {
+      console.error('[validate-admin] Signature verification error:', err);
+      return res.status(500).json({ ok: false, error: 'Internal signature verification failure' });
+    }
+  }
+
+  const userId = user.id;
+
+  // 2. Resolve connected Telegram group chat ID for the requested business
+  let chatId: number | string | null = null;
+  try {
+    const qConv = query(collection(db, 'businesses', businessId, 'conversations'), limit(15));
+    const snap = await getDocs(qConv);
+    for (const d of snap.docs) {
+      const data = d.data();
+      if (typeof data.telegramChatId === 'number' && data.telegramChatId < 0) {
+        chatId = data.telegramChatId;
+        break;
+      }
+    }
+  } catch (err) {
+    console.warn('[validate-admin] Error resolving group chat ID:', err);
+  }
+
+  // 3. Check membership and administrator role via Telegram Bot API getChatMember
+  let isAdminOfGroup = true; // Default to true if no group chat has registered yet
+  let chatStatus = 'unknown';
+
+  if (chatId && TELEGRAM_BOT_TOKEN) {
+    try {
+      const tgRes = await fetch(
+        `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getChatMember?chat_id=${chatId}&user_id=${userId}`
+      );
+      if (tgRes.ok) {
+        const body = await tgRes.json();
+        if (body.ok && body.result) {
+          chatStatus = body.result.status;
+          isAdminOfGroup = ['creator', 'administrator'].includes(chatStatus);
+        } else {
+          isAdminOfGroup = false;
+        }
+      } else {
+        isAdminOfGroup = false;
+      }
+    } catch (err) {
+      console.error('[validate-admin] getChatMember request failure:', err);
+      isAdminOfGroup = false;
+    }
+  }
+
+  // 4. Fallback: if there is no group linked yet, verify if the username matches the admin usernames list
+  if (!chatId) {
+    const ADMIN_USERNAMES = ['umurbekgafurov', 'umurbek_gafurov', 'gafurovv', 'umurbek', 'admin', 'savdobot_admin'];
+    const isOwner = user.username && ADMIN_USERNAMES.includes(user.username.toLowerCase());
+    if (!isOwner) {
+      return res.status(403).json({
+        ok: false,
+        error: 'Access Denied: You are not a registered administrator of this business store.',
+      });
+    }
+  } else if (!isAdminOfGroup) {
+    return res.status(403).json({
+      ok: false,
+      error: `Access Denied: Your status in the group is "${chatStatus}". Only group creators or administrators are permitted.`,
+    });
+  }
+
+  // Success: user is verified as an administrator
+  return res.json({
+    ok: true,
+    user: {
+      id: user.id,
+      first_name: user.first_name,
+      last_name: user.last_name,
+      username: user.username,
+    },
+    businessId,
+    status: chatStatus,
+  });
 });
 
 // Health check endpoint

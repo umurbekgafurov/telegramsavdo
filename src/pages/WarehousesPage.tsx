@@ -10,9 +10,12 @@ import {
   Package,
   Layers,
   Calendar,
-  X
+  X,
+  Eye,
+  History
 } from 'lucide-react';
-import { Warehouse, Product } from '../types';
+import { Warehouse, Product, StockMovement } from '../types';
+import { WarehouseView } from '../components/WarehouseView';
 
 interface WarehousesPageProps {
   warehouses: Warehouse[];
@@ -20,6 +23,9 @@ interface WarehousesPageProps {
   onCreateWarehouse: (data: { name: string; address: string }) => Promise<void>;
   onUpdateWarehouse: (warehouse: Warehouse) => Promise<void>;
   onDeleteWarehouse: (warehouseId: string) => Promise<void>;
+  movements: StockMovement[];
+  onAddStockMovement: (movement: StockMovement) => Promise<void>;
+  businessId?: string;
 }
 
 export const WarehousesPage: React.FC<WarehousesPageProps> = ({
@@ -28,7 +34,13 @@ export const WarehousesPage: React.FC<WarehousesPageProps> = ({
   onCreateWarehouse,
   onUpdateWarehouse,
   onDeleteWarehouse,
+  movements,
+  onAddStockMovement,
+  businessId,
 }) => {
+  const [activeView, setActiveView] = useState<'list' | 'detail'>('list');
+  const [selectedWhId, setSelectedWhId] = useState<string>('');
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingWarehouse, setEditingWarehouse] = useState<Warehouse | null>(null);
   const [name, setName] = useState('');
@@ -107,6 +119,35 @@ export const WarehousesPage: React.FC<WarehousesPageProps> = ({
     }
   };
 
+  if (activeView === 'detail' && selectedWhId) {
+    const selectedWh = warehouses.find(w => w.id === selectedWhId);
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setActiveView('list')}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl transition-all cursor-pointer"
+          >
+            ← Barcha omborlarga qaytish
+          </button>
+          <span className="text-xs text-slate-400">/</span>
+          <span className="text-xs font-bold text-slate-900">{selectedWh?.name || 'Ombor tafsilotlari'}</span>
+        </div>
+
+        <WarehouseView
+          warehouses={warehouses}
+          products={products}
+          movements={movements}
+          onAddStockMovement={onAddStockMovement}
+          onAddWarehouse={async (wh) => {
+            await onCreateWarehouse({ name: wh.name, address: wh.address });
+          }}
+          businessId={businessId}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Top Header */}
@@ -122,7 +163,7 @@ export const WarehousesPage: React.FC<WarehousesPageProps> = ({
           className="flex items-center justify-center gap-1.5 px-4 py-2.5 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-xl shadow-xs transition-all"
         >
           <Plus className="w-4 h-4" />
-          Yangi ombor qo'shish
+          Yangi ombor
         </button>
       </div>
 
@@ -167,15 +208,28 @@ export const WarehousesPage: React.FC<WarehousesPageProps> = ({
                 </div>
               </div>
 
-              <div className="mt-5 pt-4 border-t border-slate-100 grid grid-cols-2 gap-2 text-xs">
-                <div className="p-2.5 bg-slate-50 rounded-xl">
-                  <span className="text-[10px] text-slate-400 uppercase font-semibold block">Mahsulot turlari</span>
-                  <span className="font-bold text-slate-800 text-sm">{prods.length} ta</span>
+              <div className="mt-5 pt-4 border-t border-slate-100 flex flex-col gap-3">
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="p-2.5 bg-slate-50 rounded-xl">
+                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">Mahsulot turlari</span>
+                    <span className="font-bold text-slate-800 text-sm">{prods.length} ta</span>
+                  </div>
+                  <div className="p-2.5 bg-sky-50/60 rounded-xl">
+                    <span className="text-[10px] text-sky-600 uppercase font-semibold block">Jami qoldiq</span>
+                    <span className="font-bold text-sky-900 text-sm">{totalStock} dona</span>
+                  </div>
                 </div>
-                <div className="p-2.5 bg-sky-50/60 rounded-xl">
-                  <span className="text-[10px] text-sky-600 uppercase font-semibold block">Jami qoldiq</span>
-                  <span className="font-bold text-sky-900 text-sm">{totalStock} dona</span>
-                </div>
+
+                <button
+                  onClick={() => {
+                    setSelectedWhId(wh.id);
+                    setActiveView('detail');
+                  }}
+                  className="w-full flex items-center justify-center gap-1.5 py-2 text-xs font-bold text-sky-700 bg-sky-50 hover:bg-sky-100 border border-sky-100 rounded-xl transition-all cursor-pointer"
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  Boshqarish va Hisobotlar
+                </button>
               </div>
             </div>
           );
